@@ -3,111 +3,210 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Kayıtlık - Twitter Yer İmleri</title>
+  <title>Kayıtlık - Minimal Modern Arşiv</title>
   
-  <!-- Tailwind CSS (Tasarım) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- FontAwesome (İkonlar) -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style id="antiClickjack">
+    body { display: none !important; }
+  </style>
+  <script type="text/javascript">
+    (function() {
+      try {
+        if (self === top) {
+          var antiClickjack = document.getElementById("antiClickjack");
+          if (antiClickjack) antiClickjack.parentNode.removeChild(antiClickjack);
+        } else {
+          top.location = self.location;
+        }
+      } catch (e) {
+        var antiClickjack = document.getElementById("antiClickjack");
+        if (antiClickjack) antiClickjack.parentNode.removeChild(antiClickjack);
+      }
+    })();
+  </script>
 
-  <!-- React ve ReactDOM (Mantık) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  
-  <!-- Babel (JSX Çevirici) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <style>
-    /* Özel Scrollbar Tasarımı */
     .custom-scrollbar::-webkit-scrollbar { width: 6px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     
-    /* Yükleme Animasyonu Keyframe'i */
     @keyframes spin-slow {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-    @keyframes pulse-soft {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
+    .twitter-tweet { margin-top: 0 !important; margin-bottom: 0 !important; width: 100% !important; }
+    
+    .modal-enter { animation: fadeIn 0.2s ease-out; }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: scale(0.95); }
+      to { opacity: 1; transform: scale(1); }
     }
   </style>
 </head>
 <body class="bg-gray-50 text-slate-800 font-sans overflow-hidden">
 
-  <!-- React'in içine render edileceği ana div. Yükleme animasyonu burada duruyor. -->
   <div id="root">
-    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background-color: #f8fafc;">
-      <div style="width: 50px; height: 50px; border: 4px solid #e2e8f0; border-top: 4px solid #0f172a; border-radius: 50%; animation: spin-slow 1s linear infinite;"></div>
-      <h2 style="margin-top: 24px; color: #0f172a; font-size: 1.25rem; font-weight: bold; animation: pulse-soft 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;">Kayıtlık Yükleniyor...</h2>
-      <p style="color: #64748b; font-size: 0.875rem; margin-top: 8px;">Arşivin hazırlanıyor, lütfen bekle</p>
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh;">
+      <div style="width: 40px; height: 40px; border: 3px solid #e2e8f0; border-top: 3px solid #000; border-radius: 50%; animation: spin-slow 1s linear infinite;"></div>
     </div>
   </div>
 
-  <!-- UYGULAMA KODLARI (Babel ile çalışacak) -->
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
-    // --- OPTİMİZE EDİLMİŞ TWITTER EMBED BİLEŞENİ ---
-    const TweetEmbed = ({ tweetId }) => {
+    const sanitizeUrl = (url) => {
+      if (!url) return '#';
+      const trimmed = url.trim();
+      if (trimmed.toLowerCase().startsWith('javascript:')) return '#';
+      return trimmed.startsWith('http') ? trimmed : 'https://' + trimmed;
+    };
+
+    const extractTweetId = (url) => {
+      const match = url.match(/\/status\/(\d+)/);
+      return match && /^\d+$/.test(match[1]) ? match[1] : null;
+    };
+
+    const TweetEmbed = ({ tweetId, theme = 'light' }) => {
       const [isVisible, setIsVisible] = useState(false);
       const containerRef = useRef(null);
 
       useEffect(() => {
-        const observer = new IntersectionObserver(
-          ([entry]) => {
-            if (entry.isIntersecting) {
-              setIsVisible(true);
-              observer.disconnect();
-            }
-          },
-          { rootMargin: '200px' }
-        );
-
+        const observer = new IntersectionObserver(([entry]) => {
+          if (entry.isIntersecting) { setIsVisible(true); observer.disconnect(); }
+        }, { rootMargin: '400px' });
         if (containerRef.current) observer.observe(containerRef.current);
         return () => observer.disconnect();
       }, []);
 
       useEffect(() => {
-        if (isVisible && window.twttr) {
+        if (isVisible && window.twttr && /^\d+$/.test(tweetId)) {
           containerRef.current.innerHTML = ''; 
-          window.twttr.widgets.createTweet(tweetId, containerRef.current, {
-            theme: 'light',
-            align: 'center',
-            dnt: true 
+          window.twttr.widgets.createTweet(tweetId, containerRef.current, { 
+            theme: theme, align: 'center', dnt: true, conversation: 'none' 
           });
         }
-      }, [isVisible, tweetId]);
+      }, [isVisible, tweetId, theme]);
 
       return (
-        <div ref={containerRef} className="min-h-[200px] flex items-center justify-center bg-slate-50 rounded-xl border border-slate-100 mb-3">
-          {!isVisible && <div className="text-slate-400 text-sm animate-pulse">Tweet yükleniyor...</div>}
+        <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center">
+          {!isVisible && <div className="w-full h-32 bg-slate-50 animate-pulse rounded-xl"></div>}
         </div>
       );
     };
 
-    // --- ANA UYGULAMA BİLEŞENİ ---
     function App() {
+      const [viewMode, setViewMode] = useState('grid');
+      
       const [bookmarks, setBookmarks] = useState([]);
+      const [trash, setTrash] = useState([]);
       const [activeFolder, setActiveFolder] = useState('Tümü');
       const [searchQuery, setSearchQuery] = useState('');
+      const [gridCols, setGridCols] = useState(3);
       const [isModalOpen, setIsModalOpen] = useState(false);
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+      const [focusedTweet, setFocusedTweet] = useState(null);
 
+      // Form State'leri
       const [newUrl, setNewUrl] = useState('');
       const [newFolder, setNewFolder] = useState('');
       const [newTags, setNewTags] = useState('');
       const [newDesc, setNewDesc] = useState('');
+      const [newTweetText, setNewTweetText] = useState(''); // Yeni: Chrome Extension'dan gelecek metin
+
+      // Klasör ve Etiket State'leri
+      const [customFolders, setCustomFolders] = useState([]);
+      const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
+      const [editingFolder, setEditingFolder] = useState(null);
+      const [folderNameInput, setFolderNameInput] = useState('');
+      const [folderColorInput, setFolderColorInput] = useState('#3b82f6');
+
+      const [customTags, setCustomTags] = useState([]);
+      const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+      const [editingTag, setEditingTag] = useState(null);
+      const [tagNameInput, setTagNameInput] = useState('');
+      const [tagColorInput, setTagColorInput] = useState('#64748b');
+      
+      // İstek: Etiketler akordiyonu varsayılan olarak kapalı
+      const [isTagsExpanded, setIsTagsExpanded] = useState(false); 
+
+      // Focus Edit State'leri
+      const [isEditingFocus, setIsEditingFocus] = useState(false);
+      const [focusEditDesc, setFocusEditDesc] = useState('');
+      const [focusEditTags, setFocusEditTags] = useState('');
+      const [focusEditFolder, setFocusEditFolder] = useState('');
+
+      // --- CHROME EXTENSION ENTEGRASYONU (URL Parametre Yakalayıcı) ---
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const extUrl = params.get('url');
+        const extText = params.get('text');
+        
+        if (extUrl) {
+          setNewUrl(extUrl);
+          if (extText) setNewTweetText(decodeURIComponent(extText));
+          setIsModalOpen(true);
+          // Parametreleri temizle ki sayfa yenilendiğinde tekrar modal açılmasın
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }, []);
 
       useEffect(() => {
-        const saved = localStorage.getItem('tweetBookmarks');
-        if (saved) {
-          try { setBookmarks(JSON.parse(saved)); } 
-          catch (e) { console.error("Veri okuma hatası", e); }
+        const savedBookmarks = localStorage.getItem('tweetBookmarks_v1');
+        let parsedBookmarks = [];
+        if (savedBookmarks) {
+          try { parsedBookmarks = JSON.parse(savedBookmarks); setBookmarks(parsedBookmarks); } catch (e) {}
         }
+
+        const savedTrash = localStorage.getItem('tweetTrash_v1');
+        if (savedTrash) {
+          try { 
+            const parsedTrash = JSON.parse(savedTrash);
+            const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            const validTrash = parsedTrash.filter(item => (now - item.deletedAt) < THIRTY_DAYS);
+            setTrash(validTrash); 
+          } catch (e) {}
+        }
+
+        const savedFolders = localStorage.getItem('tweetFolders_v1');
+        let parsedFolders = [];
+        if (savedFolders) {
+          try { parsedFolders = JSON.parse(savedFolders); } catch (e) {}
+        }
+
+        const savedTags = localStorage.getItem('tweetTags_v1');
+        let parsedTags = [];
+        if (savedTags) {
+          try { parsedTags = JSON.parse(savedTags); } catch (e) {}
+        }
+
+        const existingNames = new Set(parsedFolders.map(f => f.name));
+        parsedBookmarks.forEach(b => {
+          if (b.folder && b.folder !== 'Tümü' && !existingNames.has(b.folder)) {
+            parsedFolders.push({ id: 'f_' + Math.random().toString(36).substr(2, 9), name: b.folder, color: '#94a3b8', isPinned: false });
+            existingNames.add(b.folder);
+          }
+        });
+        
+        parsedFolders = parsedFolders.map(f => ({ ...f, isPinned: !!f.isPinned }));
+        setCustomFolders(parsedFolders);
+
+        const existingTagNames = new Set(parsedTags.map(t => t.name));
+        parsedBookmarks.forEach(b => {
+          b.tags.forEach(tag => {
+            if (!existingTagNames.has(tag)) {
+              parsedTags.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
+              existingTagNames.add(tag);
+            }
+          });
+        });
+        setCustomTags(parsedTags);
 
         if (!window.twttr) {
           const script = document.createElement("script");
@@ -117,17 +216,19 @@
         }
       }, []);
 
-      useEffect(() => {
-        localStorage.setItem('tweetBookmarks', JSON.stringify(bookmarks));
-      }, [bookmarks]);
+      useEffect(() => { localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks)); }, [bookmarks]);
+      useEffect(() => { localStorage.setItem('tweetFolders_v1', JSON.stringify(customFolders)); }, [customFolders]);
+      useEffect(() => { localStorage.setItem('tweetTags_v1', JSON.stringify(customTags)); }, [customTags]);
+      useEffect(() => { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); }, [trash]); 
 
       const handleExportJSON = () => {
-        const dataStr = JSON.stringify(bookmarks, null, 2);
+        const payload = { app: "Kayitlik", version: "4.0", bookmarks, customFolders, customTags, trash };
+        const dataStr = JSON.stringify(payload, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `tweet-arsivim-${new Date().toISOString().split('T')[0]}.json`;
+        link.download = `kayitlik-tam-yedek-${new Date().toISOString().split('T')[0]}.json`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -140,13 +241,12 @@
         const reader = new FileReader();
         reader.onload = (e) => {
           try {
-            const importedData = JSON.parse(e.target.result);
-            if (Array.isArray(importedData)) {
-              setBookmarks(importedData);
-              alert('Arşiv başarıyla yüklendi!');
-            } else {
-              alert('Geçersiz dosya formatı.');
-            }
+            const imported = JSON.parse(e.target.result);
+            if (imported.bookmarks) setBookmarks(imported.bookmarks);
+            if (imported.customFolders) setCustomFolders(imported.customFolders);
+            if (imported.customTags) setCustomTags(imported.customTags);
+            if (imported.trash) setTrash(imported.trash);
+            alert('Arşiv ve tüm renk ayarları başarıyla yüklendi!');
           } catch (error) {
             alert('Dosya okunurken bir hata oluştu.');
           }
@@ -155,313 +255,752 @@
         event.target.value = ''; 
       };
 
-      const extractTweetId = (url) => {
-        const match = url.match(/\/status\/(\d+)/);
-        return match ? match[1] : null;
-      };
-
       const handleAddBookmark = (e) => {
         e.preventDefault();
         const tweetId = extractTweetId(newUrl);
+        if (!tweetId) return alert("Geçerli bir tweet linki girin.");
 
-        if (!tweetId) {
-          alert("Geçerli bir Twitter/X linki girdiğinizden emin olun.");
-          return;
-        }
+        const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        const folderName = newFolder.trim() || "Genel";
 
-        const newBookmark = {
-          id: Date.now().toString(),
-          tweetId: tweetId,
-          url: newUrl,
-          folder: newFolder.trim() || "Diğer",
-          tags: newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean),
+        const newBtn = {
+          id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+          tweetId,
+          url: sanitizeUrl(newUrl),
+          folder: folderName,
+          tags: tagsArray,
           description: newDesc.trim(),
-          date: new Date().toLocaleDateString('tr-TR', { day: 'numeric', month: 'short', year: 'numeric' })
+          tweetText: newTweetText.trim(), // Chrome eklentisi verisi eklendi
+          date: new Date().toLocaleDateString('tr-TR')
         };
 
-        setBookmarks([newBookmark, ...bookmarks]);
+        if (folderName !== 'Tümü' && !customFolders.some(f => f.name === folderName)) {
+          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name: folderName, color: '#94a3b8', isPinned: false }]);
+        }
+
+        const newTagsList = [...customTags];
+        let tagsChanged = false;
+        tagsArray.forEach(tag => {
+          if (!newTagsList.some(t => t.name === tag)) {
+            newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
+            tagsChanged = true;
+          }
+        });
+        if (tagsChanged) setCustomTags(newTagsList);
+
+        setBookmarks([newBtn, ...bookmarks]);
         setIsModalOpen(false);
-        resetModal();
+        setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc(''); setNewTweetText('');
       };
 
-      const handleDelete = (id) => {
-        if(window.confirm("Bu yer imini silmek istediğinize emin misiniz?")) {
+      // --- ÇÖP KUTUSU İŞLEMLERİ ---
+      const handleMoveToTrash = (e, id) => {
+        e.stopPropagation();
+        const item = bookmarks.find(b => b.id === id);
+        if (item) {
+          setTrash([...trash, { ...item, deletedAt: Date.now() }]);
           setBookmarks(bookmarks.filter(b => b.id !== id));
+          if (focusedTweet && focusedTweet.id === id) setFocusedTweet(null);
         }
       };
 
-      const resetModal = () => {
-        setNewUrl('');
-        setNewFolder('');
-        setNewTags('');
-        setNewDesc('');
+      const handleRestoreFromTrash = (e, id) => {
+        e.stopPropagation();
+        const item = trash.find(t => t.id === id);
+        if (item) {
+          const { deletedAt, ...rest } = item;
+          setBookmarks([rest, ...bookmarks]);
+          setTrash(trash.filter(t => t.id !== id));
+        }
       };
 
-      const folders = useMemo(() => {
-        const uniqueFolders = new Set(bookmarks.map(b => b.folder).filter(Boolean));
-        return ['Tümü', ...Array.from(uniqueFolders)];
-      }, [bookmarks]);
+      const handlePermanentDelete = (e, id) => {
+        e.stopPropagation();
+        if(window.confirm("Bu tweeti kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.")) {
+          setTrash(trash.filter(t => t.id !== id));
+        }
+      };
 
-      const allTags = useMemo(() => {
-        const tags = new Set();
-        bookmarks.forEach(b => b.tags.forEach(t => tags.add(t)));
-        return Array.from(tags);
-      }, [bookmarks]);
+      const emptyTrash = (e) => {
+        if (e) e.stopPropagation();
+        if(window.confirm("Çöp kutusundaki tüm tweetleri kalıcı olarak silmek istediğinize emin misiniz?")) {
+          setTrash([]);
+        }
+      };
 
-      const filteredBookmarks = useMemo(() => {
-        return bookmarks.filter(bookmark => {
-          const matchesFolder = activeFolder === 'Tümü' || bookmark.folder === activeFolder;
-          const searchLower = searchQuery.toLowerCase();
-          const matchesSearch = 
-            bookmark.tags.some(t => t.includes(searchLower)) ||
-            (bookmark.description && bookmark.description.toLowerCase().includes(searchLower)) ||
-            bookmark.folder.toLowerCase().includes(searchLower);
-          
-          return matchesFolder && matchesSearch;
+      // --- KLASÖR / ETİKET YÖNETİMİ ---
+      const handleSaveFolder = (e) => {
+        e.preventDefault();
+        const fName = folderNameInput.trim();
+        if(!fName) return;
+
+        if (editingFolder) {
+          const oldName = editingFolder.name;
+          setCustomFolders(customFolders.map(f => f.id === editingFolder.id ? { ...f, name: fName, color: folderColorInput } : f));
+          if (oldName !== fName) {
+            setBookmarks(bookmarks.map(b => b.folder === oldName ? { ...b, folder: fName } : b));
+            if (activeFolder === oldName) setActiveFolder(fName);
+          }
+        } else {
+          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name: fName, color: folderColorInput, isPinned: false }]);
+        }
+        setIsFolderModalOpen(false);
+        setEditingFolder(null);
+      };
+
+      const handleDeleteFolder = (id, name) => {
+        if(window.confirm(`"${name}" klasörünü silmek istediğinize emin misiniz? İçindeki tweetler silinmeyecek, "Genel" klasörüne taşınacak.`)) {
+          setCustomFolders(customFolders.filter(f => f.id !== id));
+          setBookmarks(bookmarks.map(b => b.folder === name ? { ...b, folder: 'Genel' } : b));
+          if (activeFolder === name) setActiveFolder('Tümü');
+          setIsFolderModalOpen(false);
+        }
+      };
+
+      const togglePinFolder = (id) => {
+        setCustomFolders(customFolders.map(f => f.id === id ? { ...f, isPinned: !f.isPinned } : f));
+      };
+
+      const handleSaveTag = (e) => {
+        e.preventDefault();
+        const tName = tagNameInput.trim().toLowerCase();
+        if(!tName) return;
+
+        if (editingTag) {
+          const oldName = editingTag.name;
+          setCustomTags(customTags.map(t => t.id === editingTag.id ? { ...t, name: tName, color: tagColorInput } : t));
+          if (oldName !== tName) {
+            setBookmarks(bookmarks.map(b => ({
+              ...b,
+              tags: b.tags.map(tag => tag === oldName ? tName : tag)
+            })));
+            if (searchQuery === oldName) setSearchQuery(tName);
+          }
+        } else {
+          setCustomTags([...customTags, { id: 't_' + Date.now(), name: tName, color: tagColorInput }]);
+        }
+        setIsTagModalOpen(false);
+        setEditingTag(null);
+      };
+
+      const handleDeleteTag = (id, name) => {
+        if(window.confirm(`"#${name}" etiketini silmek istediğinize emin misiniz?`)) {
+          setCustomTags(customTags.filter(t => t.id !== id));
+          setBookmarks(bookmarks.map(b => ({ ...b, tags: b.tags.filter(tag => tag !== name) })));
+          setIsTagModalOpen(false);
+        }
+      };
+
+      const startFocusEdit = () => {
+        setFocusEditDesc(focusedTweet.description || '');
+        setFocusEditTags(focusedTweet.tags.join(', '));
+        setFocusEditFolder(focusedTweet.folder);
+        setIsEditingFocus(true);
+      };
+
+      const saveFocusEdit = () => {
+        const updatedFolder = focusEditFolder.trim() || 'Genel';
+        const tagsArray = focusEditTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        const updatedTweet = {
+          ...focusedTweet,
+          description: focusEditDesc.trim(),
+          folder: updatedFolder,
+          tags: tagsArray
+        };
+        
+        if (updatedFolder !== 'Tümü' && !customFolders.some(f => f.name === updatedFolder)) {
+          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name: updatedFolder, color: '#94a3b8', isPinned: false }]);
+        }
+
+        const newTagsList = [...customTags];
+        let tagsChanged = false;
+        tagsArray.forEach(tag => {
+          if (!newTagsList.some(t => t.name === tag)) {
+            newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
+            tagsChanged = true;
+          }
         });
-      }, [bookmarks, activeFolder, searchQuery]);
+        if (tagsChanged) setCustomTags(newTagsList);
+
+        setBookmarks(bookmarks.map(b => b.id === focusedTweet.id ? updatedTweet : b));
+        setFocusedTweet(updatedTweet);
+        setIsEditingFocus(false);
+      };
+      
+      const filteredBookmarks = useMemo(() => {
+        const sourceList = activeFolder === 'Çöp Kutusu' ? trash : bookmarks;
+        
+        return sourceList.filter(b => {
+          const mF = activeFolder === 'Tümü' || activeFolder === 'Çöp Kutusu' || b.folder === activeFolder;
+          const sL = searchQuery.toLowerCase();
+          
+          // İstek: Arama artık tweet içeriğinde de yapılıyor (b.tweetText)
+          return mF && (!sL || 
+            b.tags.some(t => t.includes(sL)) || 
+            b.description.toLowerCase().includes(sL) || 
+            b.folder.toLowerCase().includes(sL) ||
+            (b.tweetText && b.tweetText.toLowerCase().includes(sL)) 
+          );
+        });
+      }, [bookmarks, trash, activeFolder, searchQuery]);
+
+      const gridClass = {
+        3: 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3',
+        4: 'grid-cols-1 md:grid-cols-3 lg:grid-cols-4',
+        5: 'grid-cols-1 md:grid-cols-3 lg:grid-cols-5'
+      }[gridCols];
+
+      const pinnedFolders = customFolders.filter(f => f.isPinned);
+      const unpinnedFolders = customFolders.filter(f => !f.isPinned);
 
       return (
         <div className="flex h-screen w-full bg-gray-50 text-slate-800 font-sans overflow-hidden">
           
           {isSidebarOpen && (
-            <div className="fixed inset-0 bg-black/20 z-20 lg:hidden" onClick={() => setIsSidebarOpen(false)} />
+            <div className="fixed inset-0 bg-black/20 z-20 sm:hidden" onClick={() => setIsSidebarOpen(false)} />
           )}
 
           <aside className={`
-            fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-100 flex flex-col transition-transform duration-300 ease-in-out
-            ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-            lg:static lg:flex-shrink-0
+            fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-100 flex flex-col transition-transform duration-300
+            ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full sm:translate-x-0'} sm:static sm:flex-shrink-0
           `}>
             <div className="p-6 flex items-center gap-3 border-b border-gray-50">
               <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md">
                 <i className="fa-solid fa-bookmark text-white text-sm"></i>
               </div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-900">Kayıtlık</h1>
+              <h1 className="text-xl font-bold tracking-tight text-slate-900 cursor-pointer" onClick={() => { setViewMode('grid'); setActiveFolder('Tümü'); setSearchQuery(''); }}>Kayıtlık</h1>
             </div>
 
-            <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 custom-scrollbar">
+            <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 custom-scrollbar flex flex-col justify-between">
+              
               <div>
-                <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 px-2">Klasörler</h2>
-                <ul className="space-y-1">
-                  {folders.map(folder => (
-                    <li key={folder}>
-                      <button
-                        onClick={() => { setActiveFolder(folder); setIsSidebarOpen(false); }}
-                        className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm transition-all duration-200 ${
-                          activeFolder === folder 
-                            ? 'bg-black text-white font-medium shadow-sm' 
-                            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
-                        }`}
-                      >
-                        <i className={`fa-solid fa-folder ${activeFolder === folder ? 'text-white' : 'text-slate-400'}`}></i>
-                        <span className="truncate">{folder}</span>
-                        <span className={`ml-auto text-xs ${activeFolder === folder ? 'text-slate-300' : 'text-slate-400'}`}>
-                          {folder === 'Tümü' ? bookmarks.length : bookmarks.filter(b => b.folder === folder).length}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
+                <ul className="space-y-1 mb-8">
+                  <li>
+                    <button
+                      onClick={() => { setActiveFolder('Tümü'); setViewMode('grid'); setIsSidebarOpen(false); }}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 ${
+                        activeFolder === 'Tümü' && viewMode === 'grid' ? 'bg-black text-white font-medium shadow-sm' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
+                      }`}
+                    >
+                      <i className={`fa-solid fa-layer-group ${activeFolder === 'Tümü' && viewMode === 'grid' ? 'text-white' : 'text-slate-400'}`}></i>
+                      <span className="truncate font-semibold">Tümü</span>
+                      <span className={`ml-auto text-[10px] ${activeFolder === 'Tümü' && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
+                        {bookmarks.length}
+                      </span>
+                    </button>
+                  </li>
                 </ul>
+
+                {/* KLASÖRLER */}
+                <div className="mb-8">
+                  <div className="flex justify-between items-center mb-3 px-2">
+                    <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Klasörler</h2>
+                    <button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="text-slate-400 hover:text-black transition-colors p-1" title="Yeni Klasör Ekle">
+                      <i className="fa-solid fa-plus text-xs"></i>
+                    </button>
+                  </div>
+
+                  {pinnedFolders.length > 0 && (
+                    <div className="mb-4">
+                      <h3 className="text-[10px] font-bold text-slate-300 uppercase tracking-widest px-3 mb-2 flex items-center gap-1">
+                        <i className="fa-solid fa-thumbtack"></i> Favoriler
+                      </h3>
+                      <ul className="space-y-1">
+                        {pinnedFolders.map(folder => (
+                          <li key={folder.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden" style={{ backgroundColor: activeFolder === folder.name && viewMode === 'grid' ? '#000' : '' }}>
+                            <button onClick={() => { setActiveFolder(folder.name); setViewMode('grid'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === folder.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}>
+                              <i className="fa-solid fa-folder" style={{ color: activeFolder === folder.name && viewMode === 'grid' ? '#fff' : folder.color }}></i>
+                              <span className="truncate">{folder.name}</span>
+                            </button>
+                            <div className="w-14 h-full flex items-center justify-end pr-2 gap-1">
+                              <span className={`text-[10px] group-hover:hidden ${activeFolder === folder.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
+                                {bookmarks.filter(b => b.folder === folder.name).length}
+                              </span>
+                              <button onClick={(e) => { e.stopPropagation(); togglePinFolder(folder.id); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-orange-500 transition-opacity" title="Sabitlemeyi Kaldır">
+                                <i className="fa-solid fa-thumbtack text-[10px]"></i>
+                              </button>
+                              <button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color || '#3b82f6'); setIsFolderModalOpen(true); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-blue-500 transition-opacity" title="Düzenle">
+                                <i className="fa-solid fa-pen text-[10px]"></i>
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  <ul className="space-y-1">
+                    {unpinnedFolders.map(folder => (
+                      <li key={folder.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden" style={{ backgroundColor: activeFolder === folder.name && viewMode === 'grid' ? '#000' : '' }}>
+                        <button onClick={() => { setActiveFolder(folder.name); setViewMode('grid'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === folder.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}>
+                          <i className="fa-solid fa-folder" style={{ color: activeFolder === folder.name && viewMode === 'grid' ? '#fff' : folder.color }}></i>
+                          <span className="truncate">{folder.name}</span>
+                        </button>
+                        <div className="w-14 h-full flex items-center justify-end pr-2 gap-1">
+                          <span className={`text-[10px] group-hover:hidden ${activeFolder === folder.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
+                            {bookmarks.filter(b => b.folder === folder.name).length}
+                          </span>
+                          <button onClick={(e) => { e.stopPropagation(); togglePinFolder(folder.id); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-orange-500 transition-opacity" title="Sabitle">
+                            <i className="fa-solid fa-thumbtack text-[10px] opacity-50"></i>
+                          </button>
+                          <button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color || '#3b82f6'); setIsFolderModalOpen(true); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-blue-500 transition-opacity" title="Düzenle">
+                            <i className="fa-solid fa-pen text-[10px]"></i>
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+
+                {/* ETİKETLER */}
+                <div>
+                  <div 
+                    className="flex justify-between items-center mb-3 px-2 cursor-pointer select-none group" 
+                    onClick={() => setIsTagsExpanded(!isTagsExpanded)}
+                  >
+                    <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2 group-hover:text-slate-600 transition-colors">
+                      <i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[10px] w-3`}></i> 
+                      Etiketler
+                    </h2>
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} 
+                      className="text-slate-400 hover:text-black transition-colors p-1" 
+                      title="Yeni Etiket Ekle"
+                    >
+                      <i className="fa-solid fa-plus text-xs"></i>
+                    </button>
+                  </div>
+                  
+                  {isTagsExpanded && (
+                    <div className="flex flex-col space-y-1">
+                      {customTags.map(tag => (
+                        <div key={tag.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden"
+                             style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#000' : '' }}>
+                          <button 
+                            onClick={() => { setSearchQuery(searchQuery === tag.name ? '' : tag.name); setViewMode('grid'); }}
+                            className={`flex-1 flex items-center gap-3 px-3 py-2 text-sm ${searchQuery === tag.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}
+                          >
+                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#fff' : tag.color }}></span>
+                            <span className="truncate">#{tag.name}</span>
+                          </button>
+                          <div className="w-10 h-full flex items-center justify-end pr-3">
+                             <span className={`text-[10px] group-hover:hidden ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
+                               {bookmarks.filter(b => b.tags.includes(tag.name)).length}
+                             </span>
+                             <button 
+                              onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color || '#64748b'); setIsTagModalOpen(true); }}
+                              className={`hidden group-hover:flex p-1 ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-blue-500'} transition-opacity`}
+                              title="Etiketi Düzenle"
+                            >
+                              <i className="fa-solid fa-pen text-[10px]"></i>
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {allTags.length > 0 && (
-                <div>
-                  <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3 px-2">Etiketler</h2>
-                  <div className="flex flex-wrap gap-2 px-2">
-                    {allTags.slice(0, 15).map(tag => (
-                      <button 
-                        key={tag}
-                        onClick={() => setSearchQuery(tag)}
-                        className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5"
-                      >
-                        <i className="fa-solid fa-hashtag text-[10px] text-slate-400"></i>
-                        {tag}
-                      </button>
-                    ))}
-                  </div>
+              {/* ÇÖP KUTUSU (Boşalt Butonu Eklendi) */}
+              <div className="mt-8 pt-4 border-t border-slate-100">
+                <div className={`flex items-center justify-between rounded-xl overflow-hidden transition-all duration-200 ${activeFolder === 'Çöp Kutusu' ? 'bg-red-50' : 'hover:bg-red-50'}`}>
+                  <button
+                    onClick={() => { setActiveFolder('Çöp Kutusu'); setViewMode('grid'); setIsSidebarOpen(false); }}
+                    className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === 'Çöp Kutusu' ? 'text-red-600 font-medium' : 'text-slate-500 hover:text-red-500'}`}
+                  >
+                    <i className="fa-solid fa-trash-can"></i>
+                    <span className="truncate">Çöp Kutusu</span>
+                    {trash.length > 0 && (
+                      <span className="text-[10px] font-bold bg-red-100 text-red-500 px-2 py-0.5 rounded-full">
+                        {trash.length}
+                      </span>
+                    )}
+                  </button>
+                  
+                  {/* İstek: Çöp Kutusunu Boşalt Butonu */}
+                  {trash.length > 0 && (
+                    <button 
+                      onClick={emptyTrash} 
+                      className="px-3 py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-100 transition-colors"
+                      title="Çöp Kutusunu Boşalt"
+                    >
+                      <i className="fa-solid fa-broom text-xs"></i>
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
+
             </div>
           </aside>
 
-          <main className="flex-1 flex flex-col h-screen overflow-hidden relative">
-            <header className="h-20 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-4 sm:px-8 z-10 shrink-0">
-              <div className="flex items-center gap-4">
-                <button className="lg:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}>
-                  <i className="fa-solid fa-bars text-lg"></i>
+          <main className="flex-1 flex flex-col h-screen min-w-0 relative">
+            <header className="h-20 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-8 z-10 shrink-0">
+              <div className="flex items-center gap-6">
+                <button className="sm:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}>
+                  <i className="fa-solid fa-bars-staggered"></i>
                 </button>
                 <div>
-                  <h2 className="text-xl font-bold text-slate-900 capitalize hidden sm:block">{activeFolder}</h2>
-                  <p className="text-sm text-slate-500 hidden sm:block">{filteredBookmarks.length} yer imi listeleniyor</p>
+                  <h2 className="text-lg font-bold text-slate-900 capitalize hidden sm:block">
+                    {activeFolder}
+                  </h2>
+                  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider hidden sm:block">
+                    {filteredBookmarks.length} Kayıt
+                  </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-3 sm:gap-4">
-                <div className="relative hidden md:block">
-                  <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm"></i>
-                  <input 
-                    type="text" 
-                    placeholder="Notlarda ve etiketlerde ara..." 
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 pr-4 py-2.5 w-64 bg-slate-100 border-transparent rounded-full text-sm focus:bg-white focus:border-slate-300 focus:ring-2 focus:ring-slate-100 outline-none transition-all"
-                  />
-                </div>
+              <div className="flex items-center gap-4 sm:gap-6">
                 
-                <div className="flex bg-slate-100 rounded-full p-1">
-                  <button onClick={handleExportJSON} title="Yedeği İndir" className="p-2 w-8 h-8 flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-white rounded-full transition-all">
-                    <i className="fa-solid fa-download text-sm"></i>
+                {viewMode === 'grid' && activeFolder !== 'Çöp Kutusu' && (
+                  <div className="relative hidden md:block">
+                    <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
+                    <input 
+                      type="text" placeholder="İçerik, not, etiket ara..." 
+                      value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                      className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all"
+                    />
+                    {searchQuery && (
+                      <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
+                        <i className="fa-solid fa-times text-xs"></i>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex bg-slate-100 rounded-full p-1 hidden sm:flex">
+                  <button onClick={handleExportJSON} title="Tüm Arşivi İndir" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all">
+                    <i className="fa-solid fa-download text-xs"></i>
                   </button>
-                  <label title="Yedeği Yükle" className="p-2 w-8 h-8 flex items-center justify-center text-slate-500 hover:text-slate-900 hover:bg-white rounded-full transition-all cursor-pointer">
-                    <i className="fa-solid fa-upload text-sm"></i>
+                  <label title="Arşivi Yükle" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all cursor-pointer">
+                    <i className="fa-solid fa-upload text-xs"></i>
                     <input type="file" accept=".json" className="hidden" onChange={handleImportJSON} />
                   </label>
                 </div>
 
+                {viewMode === 'grid' && (
+                  <div className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
+                    {[3, 4, 5].map(n => (
+                      <button 
+                        key={n} onClick={() => setGridCols(n)}
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all ${gridCols === n ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}
+                      >
+                        {n}X
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 <button 
                   onClick={() => setIsModalOpen(true)}
-                  className="flex items-center gap-2 bg-black hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-all shadow-md hover:shadow-lg active:scale-95"
+                  className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"
                 >
-                  <i className="fa-solid fa-plus text-sm"></i>
-                  <span className="hidden sm:inline">Yeni Ekle</span>
+                  <i className="fa-solid fa-plus mr-2"></i> YENİ
                 </button>
               </div>
             </header>
 
-            <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar bg-slate-50/50">
-              {filteredBookmarks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full text-center max-w-sm mx-auto">
-                  <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-6 shadow-inner">
-                    <i className="fa-solid fa-bookmark text-3xl text-slate-300"></i>
-                  </div>
-                  <h3 className="text-xl font-bold text-slate-800 mb-2">Henüz tweet yok</h3>
-                  <p className="text-slate-500 text-sm leading-relaxed mb-8">
-                    Sağ üstteki "Yeni Ekle" butonuna tıklayarak ilk tweetini kaydet veya önceden indirdiğin yedeğini yükle.
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
-                  {filteredBookmarks.map((bookmark) => (
-                    <div key={bookmark.id} className="bg-white rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition-shadow group">
+            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+              
+              <div className={`grid ${gridClass} gap-8 items-start`}>
+                {filteredBookmarks.map(b => (
+                  <div 
+                    key={b.id} 
+                    onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }}
+                    className={`group flex flex-col bg-white rounded-2xl border border-slate-100 shadow-sm transition-all duration-300 overflow-hidden relative ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer hover:shadow-md'}`}
+                  >
+                    
+                    <div className="p-3 bg-slate-50/50 flex justify-between items-center">
+                      <span className="px-2 py-0.5 bg-white border border-slate-100 text-[9px] font-bold uppercase tracking-wider text-slate-400 rounded flex items-center">
+                        <i className="fa-solid fa-folder mr-1.5 text-[8px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i>
+                        {b.folder}
+                      </span>
                       
-                      <div className="mb-4">
-                        {bookmark.description && (
-                          <p className="text-sm font-medium text-slate-800 mb-3 leading-relaxed">
-                            {bookmark.description}
-                          </p>
-                        )}
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 text-slate-600 rounded-md text-[10px] font-bold uppercase tracking-wide">
-                            <i className="fa-solid fa-folder text-[10px]"></i>
-                            {bookmark.folder}
-                          </span>
-                          {bookmark.tags.map(tag => (
-                            <span key={tag} className="text-xs text-blue-500 font-medium bg-blue-50 px-2 py-0.5 rounded-md">
-                              #{tag}
-                            </span>
-                          ))}
+                      {activeFolder === 'Çöp Kutusu' ? (
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                           <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-6 h-6 bg-white border border-slate-100 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle">
+                            <i className="fa-solid fa-rotate-left text-[9px]"></i>
+                           </button>
+                           <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-6 h-6 bg-white border border-slate-100 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil">
+                            <i className="fa-solid fa-trash text-[9px]"></i>
+                           </button>
                         </div>
-                      </div>
-
-                      <div className="relative">
-                        <TweetEmbed tweetId={bookmark.tweetId} />
-                        
-                        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
-                          <a href={bookmark.url} target="_blank" rel="noreferrer" className="w-7 h-7 flex items-center justify-center bg-white shadow-sm border border-slate-100 rounded-lg text-slate-400 hover:text-blue-500 transition-colors">
-                            <i className="fa-solid fa-arrow-up-right-from-square text-[12px]"></i>
-                          </a>
-                          <button onClick={() => handleDelete(bookmark.id)} className="w-7 h-7 flex items-center justify-center bg-white shadow-sm border border-slate-100 rounded-lg text-slate-400 hover:text-red-500 transition-colors">
-                            <i className="fa-solid fa-trash-can text-[12px]"></i>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-2 text-right">
-                        <span className="text-[10px] text-slate-400 font-medium">{bookmark.date}</span>
-                      </div>
+                      ) : (
+                        <button 
+                          onClick={(e) => handleMoveToTrash(e, b.id)}
+                          className="w-6 h-6 bg-white border border-slate-100 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
+                          title="Çöpe At"
+                        >
+                          <i className="fa-solid fa-trash-can text-[9px]"></i>
+                        </button>
+                      )}
                     </div>
-                  ))}
+
+                    <div className="p-4 bg-white pointer-events-none">
+                      <TweetEmbed tweetId={b.tweetId} />
+                    </div>
+
+                    <div className="p-5 pt-0 space-y-3">
+                      {b.description && (
+                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
+                          <p className="text-xs font-medium text-slate-800 leading-relaxed italic line-clamp-3">
+                            "{b.description}"
+                          </p>
+                        </div>
+                      )}
+                      
+                      <div className="flex items-center justify-between pt-2">
+                        <div className="flex flex-wrap gap-1.5">
+                          {b.tags.map(tag => {
+                            const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
+                            return (
+                              <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold">
+                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tagObj.color }}></span>
+                                {tag}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        <a 
+                          href={b.url} 
+                          target="_blank" 
+                          onClick={(e) => e.stopPropagation()}
+                          className="w-7 h-7 shrink-0 flex items-center justify-center bg-slate-50 text-slate-400 hover:text-black hover:bg-slate-100 rounded-lg transition-all"
+                        >
+                          <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                        </a>
+                      </div>
+                      
+                      {activeFolder === 'Çöp Kutusu' && (
+                        <div className="pt-2 text-[10px] text-red-400 text-center font-medium">
+                          Silinme: {new Date(b.deletedAt).toLocaleDateString('tr-TR')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {filteredBookmarks.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20 opacity-30">
+                  <i className={`fa-solid ${activeFolder === 'Çöp Kutusu' ? 'fa-trash-can' : 'fa-layer-group'} text-4xl mb-4`}></i>
+                  <p className="text-sm font-bold uppercase tracking-widest">{activeFolder === 'Çöp Kutusu' ? 'Çöp Kutusu Boş' : 'İçerik Bulunamadı'}</p>
                 </div>
               )}
             </div>
           </main>
 
+          {focusedTweet && (
+            <div 
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto"
+              onClick={() => setFocusedTweet(null)}
+            >
+              <div 
+                className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row max-h-[90vh]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-center justify-center min-h-[300px]">
+                   <div className="w-full max-w-md">
+                      <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />
+                   </div>
+                </div>
+
+                <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
+                  <div>
+                    <div className="flex justify-between items-start mb-8">
+                      <span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center">
+                        <i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i>
+                        {focusedTweet.folder}
+                      </span>
+                      <div className="flex gap-2">
+                        {!isEditingFocus && (
+                          <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400" title="Düzenle">
+                            <i className="fa-solid fa-pen text-sm"></i>
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} 
+                          className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"
+                        >
+                          <i className="fa-solid fa-times text-lg"></i>
+                        </button>
+                      </div>
+                    </div>
+
+                    {isEditingFocus ? (
+                      <div className="space-y-4 mb-8">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Senin Notun</label>
+                          <textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Klasör</label>
+                          <input type="text" value={focusEditFolder} onChange={e => setFocusEditFolder(e.target.value)} list="focus-folder-options" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" />
+                          <datalist id="focus-folder-options">
+                            {customFolders.map(f => <option key={f.id} value={f.name} />)}
+                          </datalist>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Etiketler (Virgülle)</label>
+                          <input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" />
+                        </div>
+                        <div className="flex gap-2 pt-2">
+                          <button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">KAYDET</button>
+                          <button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">İPTAL</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Senin Notun</h3>
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8">
+                          <p className="text-slate-800 font-medium leading-relaxed italic">
+                            {focusedTweet.description || "Bu tweet için bir not eklenmemiş."}
+                          </p>
+                        </div>
+
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Etiketler</h3>
+                        <div className="flex flex-wrap gap-2 mb-8">
+                          {focusedTweet.tags.length > 0 ? focusedTweet.tags.map(tag => {
+                            const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
+                            return (
+                              <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold">
+                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tagObj.color }}></span>
+                                {tag}
+                              </span>
+                            );
+                          }) : <span className="text-slate-300 text-sm italic">Etiket yok</span>}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.1</span>
+                    <a 
+                      href={focusedTweet.url} 
+                      target="_blank"
+                      className="flex items-center gap-2 bg-black text-white px-5 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95"
+                    >
+                      X'TE AÇ <i className="fa-solid fa-external-link"></i>
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {isModalOpen && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-                <div className="flex justify-between items-center p-6 border-b border-slate-100 bg-slate-50/50">
-                  <h3 className="text-lg font-bold text-slate-900">Yeni Tweet Kaydet</h3>
-                  <button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-colors">
-                    <i className="fa-solid fa-xmark text-lg"></i>
+              <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center">
+                  <h3 className="font-bold text-slate-900">Yer İmi Ekle</h3>
+                  <button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all">
+                    <i className="fa-solid fa-times text-slate-400"></i>
                   </button>
                 </div>
-                
-                <form onSubmit={handleAddBookmark} className="p-6 space-y-5">
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Twitter / X Linki</label>
+                <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
+                  <input 
+                    type="url" required placeholder="Tweet URL" 
+                    value={newUrl} onChange={e => setNewUrl(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
+                  />
+                  <div className="grid grid-cols-2 gap-4">
                     <input 
-                      type="url" required
-                      placeholder="https://x.com/kullanici/status/123..."
-                      value={newUrl}
-                      onChange={(e) => setNewUrl(e.target.value)}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-black focus:bg-white transition-all"
+                      type="text" placeholder="Klasör" 
+                      value={newFolder} onChange={e => setNewFolder(e.target.value)}
+                      list="folder-options"
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
+                    />
+                    <datalist id="folder-options">
+                      {customFolders.map(f => <option key={f.id} value={f.name} />)}
+                    </datalist>
+                    <input 
+                      type="text" placeholder="Etiketler" 
+                      value={newTags} onChange={e => setNewTags(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
                     />
                   </div>
+                  <textarea 
+                    placeholder="Tweet Metni (Chrome Eklentisinden Gelebilir...)" rows="2"
+                    value={newTweetText} onChange={e => setNewTweetText(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all"
+                  />
+                  <textarea 
+                    placeholder="Notların..." rows="3"
+                    value={newDesc} onChange={e => setNewDesc(e.target.value)}
+                    className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all"
+                  />
+                  <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg hover:bg-slate-800 active:scale-95 transition-all">
+                    Koleksiyona Ekle
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Klasör</label>
-                      <input 
-                        type="text" 
-                        placeholder="Örn: Tasarım"
-                        value={newFolder}
-                        onChange={(e) => setNewFolder(e.target.value)}
-                        list="folder-options"
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-black focus:bg-white transition-all"
-                      />
-                      <datalist id="folder-options">
-                        {folders.filter(f => f !== 'Tümü').map(f => <option key={f} value={f} />)}
-                      </datalist>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-semibold text-slate-700 mb-1.5">Etiketler</label>
-                      <input 
-                        type="text" 
-                        placeholder="virgülle ayırın"
-                        value={newTags}
-                        onChange={(e) => setNewTags(e.target.value)}
-                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-black focus:bg-white transition-all"
-                      />
-                    </div>
-                  </div>
-
+          {(isFolderModalOpen || isTagModalOpen) && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center">
+                  <h3 className="font-bold text-slate-900">
+                    {isFolderModalOpen 
+                      ? (editingFolder ? 'Klasörü Düzenle' : 'Yeni Klasör') 
+                      : (editingTag ? 'Etiketi Düzenle' : 'Yeni Etiket')}
+                  </h3>
+                  <button onClick={() => { setIsFolderModalOpen(false); setIsTagModalOpen(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all">
+                    <i className="fa-solid fa-times text-slate-400"></i>
+                  </button>
+                </div>
+                <form onSubmit={isFolderModalOpen ? handleSaveFolder : handleSaveTag} className="p-6 space-y-4">
                   <div>
-                    <label className="block text-sm font-semibold text-slate-700 mb-1.5">Senin Notun</label>
-                    <textarea 
-                      placeholder="Bu tweeti neden kaydettiniz?"
-                      rows="3"
-                      value={newDesc}
-                      onChange={(e) => setNewDesc(e.target.value)}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-black focus:bg-white transition-all resize-none"
-                    ></textarea>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">
+                      {isFolderModalOpen ? 'Klasör Adı' : 'Etiket Adı'}
+                    </label>
+                    <input 
+                      type="text" required placeholder={isFolderModalOpen ? 'Örn: Tasarım' : 'Örn: ui-ux'} 
+                      value={isFolderModalOpen ? folderNameInput : tagNameInput} 
+                      onChange={e => isFolderModalOpen ? setFolderNameInput(e.target.value) : setTagNameInput(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
+                    />
                   </div>
-
-                  <div className="pt-2">
-                    <button type="submit" className="w-full bg-black hover:bg-slate-800 text-white font-medium py-3.5 rounded-xl transition-all shadow-md active:scale-[0.98] flex items-center justify-center gap-2">
-                      <i className="fa-solid fa-bookmark text-sm"></i>
-                      Koleksiyona Kaydet
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Renk Seçimi</label>
+                    <div className="flex items-center gap-3">
+                      <input 
+                        type="color" 
+                        value={isFolderModalOpen ? folderColorInput : tagColorInput} 
+                        onChange={e => isFolderModalOpen ? setFolderColorInput(e.target.value) : setTagColorInput(e.target.value)}
+                        className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer"
+                      />
+                      <span className="text-sm font-medium text-slate-600 uppercase">
+                        {isFolderModalOpen ? folderColorInput : tagColorInput}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 pt-4">
+                    <button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg hover:bg-slate-800 active:scale-95 transition-all">
+                      KAYDET
                     </button>
+                    {(isFolderModalOpen && editingFolder) && (
+                      <button type="button" onClick={() => handleDeleteFolder(editingFolder.id, editingFolder.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">
+                        SİL
+                      </button>
+                    )}
+                    {(isTagModalOpen && editingTag) && (
+                      <button type="button" onClick={() => handleDeleteTag(editingTag.id, editingTag.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">
+                        SİL
+                      </button>
+                    )}
                   </div>
                 </form>
               </div>
             </div>
           )}
+
         </div>
       );
     }
 
-    // Uygulamayı ekrana bas
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
