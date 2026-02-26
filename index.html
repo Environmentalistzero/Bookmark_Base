@@ -59,6 +59,17 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
+    // Güvenlik Kalkanı: URL Parametreleri Çözerken Tarayıcının Çökmesini Engeller
+    const safeDecode = (str) => {
+      if (!str) return '';
+      try {
+        return decodeURIComponent(str);
+      } catch (e) {
+        console.warn("URL Çözümleme Hatası (Yoksayıldı):", str);
+        return str; // Hata verirse ham metni döndür, çökmeyi engelle
+      }
+    };
+
     const sanitizeUrl = (url) => {
       if (!url) return '#';
       const trimmed = url.trim();
@@ -80,7 +91,6 @@
       }
     };
 
-    // --- ESKİ KAYITLAR İÇİN HİBRİT EMBED (Geriye Dönük Uyumluluk) ---
     const TweetEmbed = ({ tweetId, theme = 'light' }) => {
       const [isVisible, setIsVisible] = useState(false);
       const containerRef = useRef(null);
@@ -109,7 +119,6 @@
       );
     };
 
-    // --- YENİ ŞIK TWEET KARTI BİLEŞENİ ---
     const CustomTweetCard = ({ bookmark }) => {
       const handle = bookmark.authorHandle || extractHandle(bookmark.url);
       const name = bookmark.authorName || handle;
@@ -118,7 +127,6 @@
 
       return (
         <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow text-left">
-          {/* Üst Kısım: Yazar Bilgileri */}
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3">
               <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100" onError={(e) => { e.target.src = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'; }} />
@@ -130,10 +138,8 @@
             <i className="fa-brands fa-x-twitter text-slate-300 text-lg"></i>
           </div>
 
-          {/* İçerik: Metin */}
-          <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? bookmark.tweetText.replace(/\n/g, '<br/>') : ''}}></p>
+          <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : ''}}></p>
 
-          {/* İçerik: Medya (Görsel/Video) */}
           {medias.length > 0 && (
             <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 ${medias.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
               {bookmark.mediaType === 'video' ? (
@@ -155,10 +161,51 @@
     };
 
     function App() {
+      // --- Veri Silinmesini Önleyen Güvenli Başlangıç (Initialization) ---
+      const initialData = useMemo(() => {
+        let b = [], t = [], f = [], tg = [];
+        
+        try { const sb = localStorage.getItem('tweetBookmarks_v1'); if (sb) b = JSON.parse(sb); } catch(e){}
+        
+        try { 
+          const st = localStorage.getItem('tweetTrash_v1'); 
+          if (st) {
+            const parsed = JSON.parse(st);
+            const now = Date.now();
+            t = parsed.filter(item => (now - item.deletedAt) < 30 * 24 * 60 * 60 * 1000);
+          }
+        } catch(e){}
+        
+        try { const sf = localStorage.getItem('tweetFolders_v1'); if (sf) f = JSON.parse(sf); } catch(e){}
+        try { const stg = localStorage.getItem('tweetTags_v1'); if (stg) tg = JSON.parse(stg); } catch(e){}
+
+        // Otomatik Migration
+        const existingNames = new Set(f.map(x => x.name));
+        b.forEach(item => {
+          if (item.folder && item.folder !== 'Tümü' && !existingNames.has(item.folder)) {
+            f.push({ id: 'f_' + Math.random().toString(36).substr(2, 9), name: item.folder, color: '#94a3b8', isPinned: false });
+            existingNames.add(item.folder);
+          }
+        });
+        f = f.map(x => ({ ...x, isPinned: !!x.isPinned }));
+
+        const existingTagNames = new Set(tg.map(x => x.name));
+        b.forEach(item => {
+          item.tags.forEach(tag => {
+            if (!existingTagNames.has(tag)) {
+              tg.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
+              existingTagNames.add(tag);
+            }
+          });
+        });
+        
+        return { bookmarks: b, trash: t, folders: f, tags: tg };
+      }, []);
+
       const [viewMode, setViewMode] = useState('grid');
       
-      const [bookmarks, setBookmarks] = useState([]);
-      const [trash, setTrash] = useState([]);
+      const [bookmarks, setBookmarks] = useState(initialData.bookmarks);
+      const [trash, setTrash] = useState(initialData.trash);
       const [activeFolder, setActiveFolder] = useState('Tümü');
       const [searchQuery, setSearchQuery] = useState('');
       const [gridCols, setGridCols] = useState(3);
@@ -166,118 +213,38 @@
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
       const [focusedTweet, setFocusedTweet] = useState(null);
 
-      // Form State'leri
       const [newUrl, setNewUrl] = useState('');
       const [newFolder, setNewFolder] = useState('');
       const [newTags, setNewTags] = useState('');
       const [newDesc, setNewDesc] = useState('');
       const [newTweetText, setNewTweetText] = useState('');
       
-      // Yeni: Eklentiden Gelecek Detaylı Medya/Yazar Bilgileri
       const [newAuthorName, setNewAuthorName] = useState('');
       const [newAuthorHandle, setNewAuthorHandle] = useState('');
       const [newProfileImg, setNewProfileImg] = useState('');
       const [newMediaUrls, setNewMediaUrls] = useState('');
-      const [newMediaType, setNewMediaType] = useState('image'); // image veya video
+      const [newMediaType, setNewMediaType] = useState('image');
 
-      // Klasör ve Etiket State'leri
-      const [customFolders, setCustomFolders] = useState([]);
+      const [customFolders, setCustomFolders] = useState(initialData.folders);
       const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
       const [editingFolder, setEditingFolder] = useState(null);
       const [folderNameInput, setFolderNameInput] = useState('');
       const [folderColorInput, setFolderColorInput] = useState('#3b82f6');
 
-      const [customTags, setCustomTags] = useState([]);
+      const [customTags, setCustomTags] = useState(initialData.tags);
       const [isTagModalOpen, setIsTagModalOpen] = useState(false);
       const [editingTag, setEditingTag] = useState(null);
       const [tagNameInput, setTagNameInput] = useState('');
       const [tagColorInput, setTagColorInput] = useState('#64748b');
       const [isTagsExpanded, setIsTagsExpanded] = useState(false); 
 
-      // Focus Edit State'leri
       const [isEditingFocus, setIsEditingFocus] = useState(false);
       const [focusEditDesc, setFocusEditDesc] = useState('');
       const [focusEditTags, setFocusEditTags] = useState('');
       const [focusEditFolder, setFocusEditFolder] = useState('');
 
-      // --- CHROME EXTENSION ENTEGRASYONU ---
+      // Twitter Scriptini Ekle
       useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const extUrl = params.get('url');
-        const extText = params.get('text');
-        const extAuthorName = params.get('authorName');
-        const extAuthorHandle = params.get('authorHandle');
-        const extProfileImg = params.get('profileImg');
-        const extMediaUrls = params.get('mediaUrls');
-        const extMediaType = params.get('mediaType');
-        
-        if (extUrl) {
-          setNewUrl(extUrl);
-          if (extText) setNewTweetText(decodeURIComponent(extText));
-          if (extAuthorName) setNewAuthorName(decodeURIComponent(extAuthorName));
-          if (extAuthorHandle) setNewAuthorHandle(decodeURIComponent(extAuthorHandle));
-          if (extProfileImg) setNewProfileImg(decodeURIComponent(extProfileImg));
-          if (extMediaUrls) setNewMediaUrls(decodeURIComponent(extMediaUrls));
-          if (extMediaType) setNewMediaType(extMediaType);
-
-          setIsModalOpen(true);
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      }, []);
-
-      useEffect(() => {
-        const savedBookmarks = localStorage.getItem('tweetBookmarks_v1');
-        let parsedBookmarks = [];
-        if (savedBookmarks) {
-          try { parsedBookmarks = JSON.parse(savedBookmarks); setBookmarks(parsedBookmarks); } catch (e) {}
-        }
-
-        const savedTrash = localStorage.getItem('tweetTrash_v1');
-        if (savedTrash) {
-          try { 
-            const parsedTrash = JSON.parse(savedTrash);
-            const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
-            const now = Date.now();
-            const validTrash = parsedTrash.filter(item => (now - item.deletedAt) < THIRTY_DAYS);
-            setTrash(validTrash); 
-          } catch (e) {}
-        }
-
-        const savedFolders = localStorage.getItem('tweetFolders_v1');
-        let parsedFolders = [];
-        if (savedFolders) {
-          try { parsedFolders = JSON.parse(savedFolders); } catch (e) {}
-        }
-
-        const savedTags = localStorage.getItem('tweetTags_v1');
-        let parsedTags = [];
-        if (savedTags) {
-          try { parsedTags = JSON.parse(savedTags); } catch (e) {}
-        }
-
-        const existingNames = new Set(parsedFolders.map(f => f.name));
-        parsedBookmarks.forEach(b => {
-          if (b.folder && b.folder !== 'Tümü' && !existingNames.has(b.folder)) {
-            parsedFolders.push({ id: 'f_' + Math.random().toString(36).substr(2, 9), name: b.folder, color: '#94a3b8', isPinned: false });
-            existingNames.add(b.folder);
-          }
-        });
-        
-        parsedFolders = parsedFolders.map(f => ({ ...f, isPinned: !!f.isPinned }));
-        setCustomFolders(parsedFolders);
-
-        const existingTagNames = new Set(parsedTags.map(t => t.name));
-        parsedBookmarks.forEach(b => {
-          b.tags.forEach(tag => {
-            if (!existingTagNames.has(tag)) {
-              parsedTags.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
-              existingTagNames.add(tag);
-            }
-          });
-        });
-        setCustomTags(parsedTags);
-
-        // Hibrit yapı için (eski tweetleri render edebilmek adına) Twitter scripti hala lazım.
         if (!window.twttr) {
           const script = document.createElement("script");
           script.src = "https://platform.twitter.com/widgets.js";
@@ -286,13 +253,34 @@
         }
       }, []);
 
+      // --- CHROME EXTENSION ENTEGRASYONU ---
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const extUrl = params.get('url');
+        
+        if (extUrl) {
+          // Parametreleri okurken safeDecode kullanarak tarayıcının çökmesini engelliyoruz
+          setNewUrl(safeDecode(extUrl));
+          setNewTweetText(safeDecode(params.get('text')));
+          setNewAuthorName(safeDecode(params.get('authorName')));
+          setNewAuthorHandle(safeDecode(params.get('authorHandle')));
+          setNewProfileImg(safeDecode(params.get('profileImg')));
+          setNewMediaUrls(safeDecode(params.get('mediaUrls')));
+          setNewMediaType(safeDecode(params.get('mediaType')) || 'image');
+
+          setIsModalOpen(true);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }, []);
+
+      // Verileri Güvenli Kaydetme İşlemleri
       useEffect(() => { localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks)); }, [bookmarks]);
       useEffect(() => { localStorage.setItem('tweetFolders_v1', JSON.stringify(customFolders)); }, [customFolders]);
       useEffect(() => { localStorage.setItem('tweetTags_v1', JSON.stringify(customTags)); }, [customTags]);
       useEffect(() => { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); }, [trash]); 
 
       const handleExportJSON = () => {
-        const payload = { app: "Kayitlik", version: "4.2", bookmarks, customFolders, customTags, trash };
+        const payload = { app: "Kayitlik", version: "4.3", bookmarks, customFolders, customTags, trash };
         const dataStr = JSON.stringify(payload, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -783,7 +771,6 @@
                     onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }}
                     className={`group flex flex-col bg-transparent transition-all duration-300 relative ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer hover:-translate-y-1'}`}
                   >
-                    {/* Kart Üst Aksiyon ve Klasör Barı */}
                     <div className="flex justify-between items-center mb-2 px-1">
                       <span className="px-2 py-0.5 bg-white border border-slate-200 text-[9px] font-bold uppercase tracking-wider text-slate-400 rounded flex items-center shadow-sm">
                         <i className="fa-solid fa-folder mr-1.5 text-[8px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i>
@@ -810,7 +797,6 @@
                       )}
                     </div>
 
-                    {/* Akıllı Tweet Gösterimi (Metin varsa Özel Kart, yoksa Embed) */}
                     {b.tweetText ? (
                       <CustomTweetCard bookmark={b} />
                     ) : (
@@ -958,7 +944,7 @@
                   </div>
 
                   <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.2</span>
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.3</span>
                     <a 
                       href={focusedTweet.url} 
                       target="_blank"
@@ -1004,7 +990,6 @@
                     />
                   </div>
                   
-                  {/* Chrome Eklentisinden Gelen Detaylı Veriler (Kullanıcı manuel de girebilir) */}
                   <div className="h-24 overflow-y-auto custom-scrollbar border border-dashed border-slate-200 rounded-xl p-2 bg-slate-50">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Gelişmiş Veriler (Eklenti Otomatik Doldurur)</p>
                     <div className="space-y-2 px-1">
