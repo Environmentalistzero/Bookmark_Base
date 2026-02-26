@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
   <title>Kayıtlık - Minimal Modern Arşiv</title>
   
   <style id="antiClickjack">
@@ -209,7 +210,6 @@
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
       const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
       
-      // Akıllı Video Algılama: Link MP4 mü yoksa fallback poster mi?
       const isActuallyVideoLink = medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
       const isVideo = bookmark.mediaType === 'video' || isActuallyVideoLink;
 
@@ -242,7 +242,6 @@
                       autoPlay={false} 
                     />
                   ) : (
-                    // B Planı: Sadece poster var, video linki çekilemedi
                     <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
                   )}
                   <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center pointer-events-none z-10">
@@ -340,7 +339,7 @@
       const [newProfileImg, setNewProfileImg] = useState('');
       const [newMediaUrls, setNewMediaUrls] = useState('');
       const [newMediaType, setNewMediaType] = useState('image');
-      const [newPosterUrl, setNewPosterUrl] = useState(''); // Yeni: Poster desteği
+      const [newPosterUrl, setNewPosterUrl] = useState(''); 
 
       const [customFolders, setCustomFolders] = useState(initialData.folders);
       const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -848,15 +847,14 @@
                   ))}
                 </div>
               </div>
-              {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className={`fa-solid ${activeFolder === 'Çöp Kutusu' ? 'fa-trash-can' : 'fa-layer-group'} text-4xl mb-4`}></i><p className="text-sm font-bold uppercase tracking-widest">{activeFolder === 'Çöp Kutusu' ? 'Çöp Kutusu Boş' : 'İçerik Bulunamadı'}</p></div>}
+              {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">İçerik Bulunamadı</p></div>}
             </div>
           </main>
 
-          {/* TAM EKRAN MODAL (A VE B PLANI DESTEKLİ) */}
+          {/* TAM EKRAN MODAL */}
           {previewState && previewState.medias && (
             <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}>
               {previewState.mediaType === 'video' ? (
-                // Eğer mp4 veya m3u8 linki varsa gerçek oynatıcıyı aç, yoksa görsel fallback göster
                 String(previewState.medias[previewState.currentIndex]).match(/\.(mp4|webm|ogg|m3u8)/i) ? (
                   <HlsVideoPlayer 
                     src={previewState.medias[previewState.currentIndex]} 
@@ -868,14 +866,13 @@
                     onClick={(e) => e.stopPropagation()}
                   />
                 ) : (
-                  // B Planı: Video olarak işaretlenmiş ama sadece görsel (Poster) gelmiş
                   <div className="relative" onClick={(e) => e.stopPropagation()}>
                     <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" />
                     <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg">
                        <div className="bg-white/90 p-6 rounded-2xl text-center shadow-xl max-w-xs scale-90 sm:scale-100">
                           <i className="fa-solid fa-video-slash text-slate-400 text-3xl mb-3"></i>
                           <p className="text-slate-800 font-bold text-sm mb-4">Video Linki Alınamadı</p>
-                          <p className="text-slate-500 text-xs mb-6 leading-relaxed text-center">API sınırı veya hesap kilitli olduğu için video oynatılamıyor. Orijinal sayfada izleyebilirsin.</p>
+                          <p className="text-slate-500 text-xs mb-6 leading-relaxed text-center">API sınırı veya hesap kilitli olduğu için video oynatılamıyor.</p>
                           <a href={focusedTweet?.url} target="_blank" className="inline-block bg-black text-white px-6 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all">X'te Görüntüle</a>
                        </div>
                     </div>
@@ -949,7 +946,7 @@
                       <input type="text" placeholder="Yazar Adı" value={newAuthorName} onChange={e => setNewAuthorName(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
                       <input type="text" placeholder="Kullanıcı Adı" value={newAuthorHandle} onChange={e => setNewAuthorHandle(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
                       <input type="text" placeholder="Görsel / Video Linkleri" value={newMediaUrls} onChange={e => setNewMediaUrls(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Kapak Fotoğrafı (Poster) Linki" value={newPosterUrl} onChange={e => setNewPosterUrl(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Kapak Fotoğrafı Linki" value={newPosterUrl} onChange={e => setNewPosterUrl(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
                       <select value={newMediaType} onChange={e => setNewMediaType(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none"><option value="image">Görsel (Image)</option><option value="video">Video</option></select>
                       <textarea placeholder="Tweet Metni" rows="2" value={newTweetText} onChange={e => setNewTweetText(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none resize-none" />
                     </div>
