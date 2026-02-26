@@ -1,0 +1,597 @@
+const { useState, useEffect, useMemo, useRef } = React;
+
+const TAG_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
+const getRandomColor = () => TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+
+const safeDecode = (str) => {
+    if (!str) return '';
+    try { return decodeURIComponent(str); } catch (e) { return str; }
+};
+
+const sanitizeUrl = (url) => {
+    if (!url) return '#';
+    const trimmed = url.trim();
+    return trimmed.startsWith('http') ? trimmed : 'https://' + trimmed;
+};
+
+const extractTweetId = (url) => {
+    if (!url || typeof url !== 'string') return null;
+    const match = url.match(/status\/(\d+)/);
+    return match && /^\d+$/.test(match[1]) ? match[1] : null;
+};
+
+const extractHandle = (url) => {
+    if (!url || typeof url !== 'string') return '@user';
+    const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)/);
+    return match ? `@${match[1]}` : '@user';
+};
+
+const getHighResUrl = (url) => {
+    if (!url) return '';
+    if (url.match(/\.(mp4|webm|ogg|m3u8)/i)) return url;
+    if (url.includes('name=')) return url.replace(/name=[a-zA-Z0-9_]+/, 'name=orig');
+    if (url.includes('pbs.twimg.com')) return url + (url.includes('?') ? '&' : '?') + 'name=orig';
+    return url;
+};
+
+const handleDownload = async (url) => {
+    try {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tweetmark_media';
+        a.click();
+    } catch (err) { window.open(url, '_blank'); }
+};
+
+const HlsVideoPlayer = ({ src, poster, className, controls, autoPlay, muted }) => {
+    const videoRef = useRef(null);
+    useEffect(() => {
+        const video = videoRef.current;
+        if (!video || !src) return;
+        let hls;
+        if (src.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
+            hls = new window.Hls();
+            hls.loadSource(src);
+            hls.attachMedia(video);
+            if (autoPlay) hls.on(window.Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => { }));
+        } else { video.src = src; if (autoPlay) video.play().catch(() => { }); }
+        return () => hls && hls.destroy();
+    }, [src, autoPlay]);
+    return <video ref={videoRef} className={className} controls={controls} muted={muted} poster={poster} playsInline preload="metadata" />;
+};
+
+const TweetEmbed = ({ tweetId }) => {
+    const containerRef = useRef(null);
+    useEffect(() => {
+        if (window.twttr && tweetId && containerRef.current) {
+            containerRef.current.innerHTML = '';
+            window.twttr.widgets.createTweet(tweetId, containerRef.current, { theme: 'light', align: 'center', dnt: true });
+        }
+    }, [tweetId]);
+    return <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center bg-slate-50 rounded-xl" />;
+};
+
+const CustomTweetCard = ({ bookmark, onImageClick }) => {
+    const handle = bookmark.authorHandle || extractHandle(bookmark.url);
+    const name = bookmark.authorName || handle;
+    const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+    const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
+    const isVideo = bookmark.mediaType === 'video' || medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
+
+    return (
+        <div className="text-left w-full">
+            <div className="flex items-center justify-between mb-3 px-1">
+                <div className="flex items-center gap-3 overflow-hidden pr-2">
+                    <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100 shrink-0" />
+                    <div className="flex flex-col overflow-hidden">
+                        <span className="font-bold text-slate-900 text-[15px] leading-tight truncate">{name}</span>
+                        <span className="text-slate-500 text-xs truncate">{handle}</span>
+                    </div>
+                </div>
+                <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
+            </div>
+            <p className="text-slate-800 text-[17px] leading-relaxed whitespace-pre-wrap mb-3 px-1 break-words overflow-hidden" dangerouslySetInnerHTML={{ __html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : '' }}></p>
+            {medias.length > 0 && (
+                <div className={`rounded-2xl overflow-hidden border border-slate-100 bg-black/5 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
+                    {isVideo ? (
+                        <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity" onClick={(e) => { e.stopPropagation(); onImageClick(medias, 0, 'video', bookmark.posterUrl); }}>
+                            <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted playsInline />
+                            <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center z-10"><i className="fa-solid fa-play text-white text-xl ml-1"></i></div>
+                        </div>
+                    ) : (
+                        medias.map((url, idx) => <img key={idx} src={url} alt="Media" onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }} className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 bg-slate-100" />)
+                    )}
+                </div>
+            )}
+        </div>
+    );
+};
+
+function App() {
+    // --- INITIAL STATE ---
+    const initialData = useMemo(() => {
+        const safeParse = (key) => {
+            try { const d = localStorage.getItem(key); return d ? JSON.parse(d) : []; } catch (e) { return []; }
+        };
+        return {
+            bookmarks: safeParse('tweetBookmarks_v1'),
+            trash: safeParse('tweetTrash_v1'),
+            folders: safeParse('tweetFolders_v2'),
+            tags: safeParse('tweetTags_v1')
+        };
+    }, []);
+
+    const [bookmarks, setBookmarks] = useState(initialData.bookmarks);
+    const [customFolders, setCustomFolders] = useState(initialData.folders);
+    const [customTags, setCustomTags] = useState(initialData.tags);
+    const [trash, setTrash] = useState(initialData.trash);
+    const [activeFolder, setActiveFolder] = useState('All');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [gridCols, setGridCols] = useState(() => parseInt(localStorage.getItem('tweetGridCols')) || 3);
+
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [isGridMenuOpen, setIsGridMenuOpen] = useState(false);
+    const [focusedTweet, setFocusedTweet] = useState(null);
+    const [previewState, setPreviewState] = useState(null);
+    const [expandedFolders, setExpandedFolders] = useState([]);
+    const [dragOverFolderId, setDragOverFolderId] = useState(null);
+    const dragItemRef = useRef(null);
+
+    const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
+    const [editingFolder, setEditingFolder] = useState(null);
+    const [folderNameInput, setFolderNameInput] = useState('');
+    const [folderColorInput, setFolderColorInput] = useState('#3b82f6');
+
+    const [isTagModalOpen, setIsTagModalOpen] = useState(false);
+    const [editingTag, setEditingTag] = useState(null);
+    const [tagNameInput, setTagNameInput] = useState('');
+    const [tagColorInput, setTagColorInput] = useState('#64748b');
+    const [isTagsExpanded, setIsTagsExpanded] = useState(true);
+
+    const [isEditingFocus, setIsEditingFocus] = useState(false);
+    const [focusEditDesc, setFocusEditDesc] = useState('');
+    const [focusEditTags, setFocusEditTags] = useState('');
+    const [focusEditFolder, setFocusEditFolder] = useState('');
+
+    const [newUrl, setNewUrl] = useState('');
+    const [newFolder, setNewFolder] = useState('');
+    const [newTags, setNewTags] = useState('');
+    const [newDesc, setNewDesc] = useState('');
+
+    // --- EFFECTS ---
+    useEffect(() => {
+        localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks));
+        localStorage.setItem('tweetFolders_v2', JSON.stringify(customFolders));
+        localStorage.setItem('tweetTags_v1', JSON.stringify(customTags));
+        localStorage.setItem('tweetTrash_v1', JSON.stringify(trash));
+        localStorage.setItem('tweetGridCols', gridCols.toString());
+    }, [bookmarks, customFolders, customTags, trash, gridCols]);
+
+    useEffect(() => {
+        if (!window.twttr) {
+            const script = document.createElement("script");
+            script.src = "https://platform.twitter.com/widgets.js";
+            script.async = true;
+            document.body.appendChild(script);
+        }
+    }, []);
+
+    // Preload all images when preview opens
+    useEffect(() => {
+        if (previewState && previewState.medias && previewState.mediaType !== 'video') {
+            previewState.medias.forEach(url => {
+                const img = new Image();
+                img.src = getHighResUrl(url);
+            });
+        }
+    }, [previewState?.medias]);
+
+    // --- HANDLERS ---
+    const handleExportJSON = () => {
+        const payload = { bookmarks, customFolders, customTags, trash };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `tweetmark-backup.json`;
+        a.click();
+    };
+
+    const handleImportJSON = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                if (data.bookmarks) setBookmarks(data.bookmarks);
+                if (data.customFolders) setCustomFolders(data.customFolders);
+                if (data.customTags) setCustomTags(data.customTags);
+                if (data.trash) setTrash(data.trash);
+                alert("Archive loaded!");
+            } catch (err) { alert("Error loading file."); }
+        };
+        reader.readAsText(file);
+    };
+
+    const handleAddBookmark = (e) => {
+        e.preventDefault();
+        const tweetId = extractTweetId(newUrl);
+        if (!tweetId) return alert("Please enter a valid tweet link.");
+
+        const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        const newTagsList = [...customTags];
+        let tagsChanged = false;
+        tagsArray.forEach(tag => {
+            if (!newTagsList.some(t => t.name === tag)) {
+                newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: getRandomColor() });
+                tagsChanged = true;
+            }
+        });
+        if (tagsChanged) setCustomTags(newTagsList);
+
+        const newBtn = {
+            id: Date.now().toString(),
+            tweetId,
+            url: sanitizeUrl(newUrl),
+            folder: newFolder.trim() || "General",
+            tags: tagsArray,
+            description: newDesc.trim(),
+            date: new Date().toLocaleDateString('en-US')
+        };
+
+        setBookmarks([newBtn, ...bookmarks]);
+        setIsModalOpen(false);
+        setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc('');
+    };
+
+    const handleMoveToTrash = (e, id) => {
+        e.stopPropagation();
+        const item = bookmarks.find(b => b.id === id);
+        if (item) {
+            setTrash(prev => [{ ...item, deletedAt: Date.now() }, ...prev]);
+            setBookmarks(prev => prev.filter(b => b.id !== id));
+            if (focusedTweet && focusedTweet.id === id) setFocusedTweet(null);
+        }
+    };
+
+    const handleRestoreFromTrash = (e, id) => {
+        e.stopPropagation();
+        const item = trash.find(t => t.id === id);
+        if (item) {
+            setBookmarks(prev => [item, ...prev]);
+            setTrash(prev => prev.filter(t => t.id !== id));
+        }
+    };
+
+    const handlePermanentDelete = (e, id) => {
+        e.stopPropagation();
+        if (window.confirm("Are you sure you want to permanently delete this?")) {
+            setTrash(prev => prev.filter(t => t.id !== id));
+        }
+    };
+
+    const handleSaveFolder = (e) => {
+        e.preventDefault();
+        const name = folderNameInput.trim();
+        if (!name) return;
+        if (editingFolder) {
+            setCustomFolders(customFolders.map(f => f.id === editingFolder.id ? { ...f, name, color: folderColorInput } : f));
+        } else {
+            setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name, color: folderColorInput, parentId: null, isPinned: false }]);
+        }
+        setIsFolderModalOpen(false);
+        setEditingFolder(null);
+    };
+
+    const handleSaveTag = (e) => {
+        e.preventDefault();
+        const name = tagNameInput.trim().toLowerCase();
+        if (!name) return;
+        if (editingTag) {
+            setCustomTags(customTags.map(t => t.id === editingTag.id ? { ...t, name, color: tagColorInput } : t));
+            setBookmarks(bookmarks.map(b => ({
+                ...b,
+                tags: b.tags.map(tag => tag === editingTag.name ? name : tag)
+            })));
+        } else {
+            setCustomTags([...customTags, { id: 't_' + Date.now(), name: name, color: tagColorInput }]);
+        }
+        setIsTagModalOpen(false);
+        setEditingTag(null);
+    };
+
+    const startFocusEdit = () => {
+        setFocusEditDesc(focusedTweet.description || '');
+        setFocusEditTags((focusedTweet.tags || []).join(', '));
+        setFocusEditFolder(focusedTweet.folder || 'General');
+        setIsEditingFocus(true);
+    };
+
+    const saveFocusEdit = () => {
+        const tagsArray = focusEditTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+        const newTagsList = [...customTags];
+        tagsArray.forEach(tag => {
+            if (!newTagsList.some(t => t.name === tag)) {
+                newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: getRandomColor() });
+            }
+        });
+        setCustomTags(newTagsList);
+
+        const updatedTweet = { ...focusedTweet, description: focusEditDesc.trim(), folder: focusEditFolder.trim(), tags: tagsArray };
+        setBookmarks(prev => prev.map(b => b.id === focusedTweet.id ? updatedTweet : b));
+        setFocusedTweet(updatedTweet);
+        setIsEditingFocus(false);
+    };
+
+    // --- RENDER HELPERS ---
+    const getFolderAndDescendants = (folderId, list) => {
+        let names = [list.find(f => f.id === folderId).name];
+        list.filter(f => f.parentId === folderId).forEach(c => {
+            names = names.concat(getFolderAndDescendants(c.id, list));
+        });
+        return names.filter(Boolean);
+    };
+
+    const topLevelFolders = useMemo(() => customFolders.filter(f => !f.parentId), [customFolders]);
+    const getCumulativeCount = (fId) => bookmarks.filter(b => getFolderAndDescendants(fId, customFolders).includes(b.folder)).length;
+    const unsortedCount = useMemo(() => bookmarks.filter(b => !b.folder || b.folder === 'General' || b.folder === 'Genel').length, [bookmarks]);
+
+    const filteredBookmarks = useMemo(() => {
+        const source = activeFolder === 'Trash' ? trash : bookmarks;
+        return source.filter(b => {
+            let mF = false;
+            if (activeFolder === 'All' || activeFolder === 'Trash') mF = true;
+            else if (activeFolder === 'Unsorted') mF = (!b.folder || b.folder === 'General' || b.folder === 'Genel');
+            else if (activeFolder.startsWith('tag:')) {
+                const tagName = activeFolder.split(':')[1];
+                mF = (b.tags || []).includes(tagName);
+            } else {
+                const f = customFolders.find(f => f.name === activeFolder);
+                mF = f ? getFolderAndDescendants(f.id, customFolders).includes(b.folder) : (b.folder === activeFolder);
+            }
+            const s = searchQuery.toLowerCase();
+            return mF && (!s || (b.tags || []).some(t => t.includes(s)) || (b.description || '').toLowerCase().includes(s) || (b.tweetText || '').toLowerCase().includes(s) || (b.authorName || '').toLowerCase().includes(s));
+        });
+    }, [bookmarks, trash, activeFolder, searchQuery, customFolders]);
+
+    const FolderItem = ({ folder, depth = 0 }) => {
+        const children = customFolders.filter(f => f.parentId === folder.id);
+        const isExpanded = expandedFolders.includes(folder.id);
+        const isActive = activeFolder === folder.name;
+        return (
+            <div className="w-full">
+                <div draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onDragOver={(e) => { e.preventDefault(); setDragOverFolderId(folder.id); }} onDragLeave={() => setDragOverFolderId(null)} onDrop={(e) => {
+                    e.preventDefault(); setDragOverFolderId(null);
+                    const data = dragItemRef.current;
+                    if (!data || (data.type === 'folder' && data.id === folder.id)) return;
+                    if (data.type === 'folder') setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: folder.id } : f));
+                    else if (data.type === 'tweet') setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
+                    dragItemRef.current = null;
+                }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0' }}>
+                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-6 h-6 flex items-center justify-center ${children.length === 0 && 'invisible'}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
+                    <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
+                    <div className="flex items-center gap-1.5 pr-2"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
+                </div>
+                {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
+            </div>
+        );
+    };
+
+    const gridConfig = {
+        1: { cols: 'columns-1', padding: 'max-w-3xl', cardWidth: 'max-w-2xl' },
+        2: { cols: 'columns-1 md:columns-2', padding: 'max-w-5xl', cardWidth: 'max-w-lg' },
+        3: { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl', cardWidth: 'max-w-[420px]' },
+        4: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4', padding: 'max-w-[90rem]', cardWidth: 'max-w-full' },
+        5: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5', padding: 'max-w-[120rem]', cardWidth: 'max-w-full' }
+    }[gridCols] || { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl', cardWidth: 'max-w-[420px]' };
+
+    return (
+        <div className="flex h-screen w-full bg-slate-50 text-slate-800 font-sans overflow-hidden">
+            <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm hidden sm:flex">
+                <div className="p-6 flex items-center gap-3 border-b border-slate-50">
+                    <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md"><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
+                    <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
+                </div>
+                <div className="flex-1 overflow-y-auto py-6 px-4 space-y-6 custom-scrollbar">
+                    <ul className="space-y-0.5">
+                        <li><button onClick={() => setActiveFolder('All')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'All' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}><i className="fa-solid fa-layer-group"></i> All <span className="ml-auto text-xs font-bold opacity-60">{bookmarks.length}</span></button></li>
+                        <li><button onClick={() => setActiveFolder('Unsorted')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Unsorted' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}><i className="fa-solid fa-inbox"></i> Unsorted <span className="ml-auto text-xs font-bold opacity-60">{unsortedCount}</span></button></li>
+                    </ul>
+                    <div>
+                        <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Folders</h2><button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
+                        <div className="space-y-0.5">{topLevelFolders.map(f => <FolderItem key={f.id} folder={f} />)}</div>
+                    </div>
+                    <div>
+                        <div className="flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
+                            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
+                            <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                        </div>
+                        {isTagsExpanded && (
+                            <div className="space-y-0.5 mt-1">
+                                {customTags.length > 0 ? customTags.map(tag => {
+                                    const isActive = activeFolder === `tag:${tag.name}`;
+                                    return (
+                                        <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white shadow-sm' : 'hover:bg-slate-100'}`}>
+                                            <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-3 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="w-2 h-2 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: tag.color }}></span> #{tag.name}</button>
+                                            <div className="flex items-center pr-3"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{bookmarks.filter(b => (b.tags || []).includes(tag.name)).length}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button></div>
+                                        </div>
+                                    );
+                                }) : <div className="px-3 py-2 text-[11px] text-slate-400 italic">No tags yet</div>}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <div className="p-4 border-t border-slate-100"><button onClick={() => setActiveFolder('Trash')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash <span className="ml-auto text-xs font-bold opacity-60">{trash.length}</span></button></div>
+            </aside>
+
+            <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
+                <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-40 shrink-0">
+                    <div className="flex items-center gap-4"><button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button><h2 className="text-lg font-bold text-slate-900 capitalize">{activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2></div>
+                    <div className="flex items-center gap-4">
+                        <div className="relative hidden md:block"><i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i><input type="text" placeholder="Search notes, tags, or profiles..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all" /></div>
+                        <div className="flex bg-slate-100 rounded-full p-1"><button onClick={handleExportJSON} className="p-2 text-slate-500 hover:text-black transition-colors" title="Download Backup"><i className="fa-solid fa-download text-xs"></i></button><label className="p-2 text-slate-500 hover:text-black cursor-pointer" title="Upload Backup"><i className="fa-solid fa-upload text-xs"></i><input type="file" accept=".json" className="hidden" onChange={handleImportJSON} /></label></div>
+                        <div className="relative" tabIndex="0" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsGridMenuOpen(false); }}>
+                            <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i> {gridCols} Column</button>
+                            {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
+                        </div>
+                        <button onClick={() => setIsModalOpen(true)} className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-plus mr-2"></i> NEW</button>
+                    </div>
+                </header>
+                <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
+                    <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-6`}>
+                        {filteredBookmarks.map(b => (
+                            <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-4`}>
+                                <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type, poster })} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
+
+                                <div className="mt-4 space-y-3 pt-3 border-t border-slate-50">
+                                    {b.description && <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">{b.description}</p></div>}
+
+                                    <div className="flex items-center justify-between gap-2">
+                                        <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+                                            <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder || 'Unsorted'}</span>
+                                            {(b.tags || []).map(tag => {
+                                                const tO = customTags.find(t => t.name === tag);
+                                                return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tO?.color || '#64748b' }}></span> #{tag}</span>;
+                                            })}
+                                        </div>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            {activeFolder === 'Trash' ? (
+                                                <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><i className="fa-solid fa-rotate-left"></i></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><i className="fa-solid fa-trash"></i></button></div>
+                                            ) : (
+                                                <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><i className="fa-solid fa-trash-can text-[13px]"></i></button>
+                                            )}
+                                            <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div></div>
+                    {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
+                </div>
+            </main>
+
+            {/* EDIT (FOCUS) MODAL */}
+            {focusedTweet && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
+                    <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex-1 bg-slate-50 p-8 sm:p-16 lg:p-24 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[400px]"><div className="w-full max-w-lg">{focusedTweet.tweetText ? <div className="scale-105 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <div className="scale-110"><TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} /></div>}</div></div>
+                        <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
+                            <div><div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span><div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div></div>
+                                {isEditingFocus ? (
+                                    <div className="space-y-4 mb-8">
+                                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Folder</label>
+                                            <select
+                                                value={focusEditFolder}
+                                                onChange={e => setFocusEditFolder(e.target.value)}
+                                                className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black appearance-none cursor-pointer"
+                                            >
+                                                <option value="General">General</option>
+                                                {customFolders.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
+                                            </select>
+                                        </div>
+                                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label><input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /></div>
+                                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">CANCEL</button></div>
+                                    </div>
+                                ) : (
+                                    <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed italic break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
+                                )}
+                            </div>
+                            <div className="pt-6 border-t border-slate-50 flex items-center gap-3 mt-auto">
+                                <button
+                                    onClick={(e) => { handleMoveToTrash(e, focusedTweet.id); setFocusedTweet(null); }}
+                                    className="w-12 h-12 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95"
+                                    title="Move to Trash"
+                                >
+                                    <i className="fa-solid fa-trash-can"></i>
+                                </button>
+                                <a href={focusedTweet.url} target="_blank" className="flex-1 flex items-center justify-center gap-2 bg-black text-white px-5 py-3.5 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">
+                                    OPEN ON X <i className="fa-solid fa-external-link"></i>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* TAG MODAL */}
+            {isTagModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                        <form onSubmit={handleSaveTag} className="p-6 space-y-4">
+                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Pick a Color</label><div className="flex items-center gap-3"><input type="color" value={tagColorInput} onChange={e => setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium text-slate-600 uppercase font-mono">{tagColorInput}</span></div></div>
+                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* ADD MODAL */}
+            {isModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter">
+                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                        <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
+                            <input type="url" required placeholder="Tweet URL (https://x.com/...)" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" />
+                            <div className="grid grid-cols-2 gap-4"><input type="text" placeholder="Folder" value={newFolder} onChange={e => setNewFolder(e.target.value)} list="folder-options" className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /><datalist id="folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist><input type="text" placeholder="Tags (comma separated)" value={newTags} onChange={e => setNewTags(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                            <textarea placeholder="Your Note..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none resize-none transition-all" ></textarea>
+                            <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg">Add to Collection</button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* PREVIEW MODAL */}
+            {previewState && (
+                <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'ArrowRight' && previewState.medias.length > 1) { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }
+                        if (e.key === 'ArrowLeft' && previewState.medias.length > 1) { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }
+                        if (e.key === 'Escape') setPreviewState(null);
+                    }} tabIndex={0} ref={(el) => el && el.focus()}
+                >
+                    {/* Left Arrow */}
+                    {previewState.medias.length > 1 && (
+                        <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }} className="absolute left-4 sm:left-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-left text-lg"></i></button>
+                    )}
+                    {/* Media */}
+                    {previewState.mediaType === 'video' ? <HlsVideoPlayer src={previewState.medias[previewState.currentIndex]} poster={previewState.poster} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none" onClick={(e) => e.stopPropagation()} /> : <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />}
+                    {/* Right Arrow */}
+                    {previewState.medias.length > 1 && (
+                        <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }} className="absolute right-4 sm:right-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-right text-lg"></i></button>
+                    )}
+                    {/* Counter */}
+                    {previewState.medias.length > 1 && (
+                        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white text-xs font-bold px-4 py-2 rounded-full">{previewState.currentIndex + 1} / {previewState.medias.length}</div>
+                    )}
+                    {/* Top bar buttons */}
+                    <button onClick={(e) => { e.stopPropagation(); handleDownload(getHighResUrl(previewState.medias[previewState.currentIndex])); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-download"></i></button>
+                    <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-xmark text-xl"></i></button>
+                </div>
+            )}
+
+            {/* FOLDER MODAL */}
+            {isFolderModalOpen && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                        <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
+                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
+                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
