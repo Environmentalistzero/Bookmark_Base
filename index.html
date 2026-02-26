@@ -26,6 +26,10 @@
 
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- HLS.js for playing Twitter m3u8 videos -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -92,10 +96,9 @@
       }
     };
 
-    // Yüksek çözünürlük alırken videoların bozulmasını engelleyen koruma
     const getHighResUrl = (url) => {
       if (!url) return '';
-      if (url.match(/\.(mp4|webm|ogg|m3u8)/i)) return url; // Videolara dokunma
+      if (url.match(/\.(mp4|webm|ogg|m3u8)/i)) return url; 
       if (url.includes('name=')) {
         return url.replace(/name=[a-zA-Z0-9_]+/, 'name=large');
       }
@@ -120,6 +123,57 @@
         console.error('CORS veya ağ hatası. Medya yeni sekmede açılıyor...', err);
         window.open(url, '_blank');
       }
+    };
+
+    // --- ÖZEL HLS VİDEO OYNATICI ---
+    // Twitter'ın .m3u8 formatlı videolarını oynatabilmek için HLS.js kullanıyoruz
+    const HlsVideoPlayer = ({ src, className, controls, autoPlay, muted, onClick }) => {
+      const videoRef = useRef(null);
+
+      useEffect(() => {
+        const video = videoRef.current;
+        if (!video || !src) return;
+
+        let hls;
+
+        if (src.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
+          hls = new window.Hls();
+          hls.loadSource(src);
+          hls.attachMedia(video);
+          hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+            if (autoPlay) {
+              video.play().catch(e => console.warn("Otomatik oynatma engellendi:", e));
+            }
+          });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+          // Safari desteği
+          video.src = src;
+          video.addEventListener('loadedmetadata', () => {
+            if (autoPlay) {
+              video.play().catch(e => console.warn("Otomatik oynatma engellendi:", e));
+            }
+          });
+        } else {
+          // Normal mp4 vb.
+          video.src = src;
+        }
+
+        return () => {
+          if (hls) hls.destroy();
+        };
+      }, [src, autoPlay]);
+
+      return (
+        <video 
+          ref={videoRef}
+          className={className}
+          controls={controls}
+          muted={muted}
+          onClick={onClick}
+          playsInline
+          preload="metadata"
+        />
+      );
     };
 
     const TweetEmbed = ({ tweetId, theme = 'light' }) => {
@@ -156,7 +210,6 @@
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
       const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
       
-      // HATA ÇÖZÜMÜ: Eğer URL .mp4 içeriyorsa mediaType belirtilmese bile Video olarak algıla
       const isVideo = bookmark.mediaType === 'video' || medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
 
       return (
@@ -175,12 +228,18 @@
           <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3 break-words overflow-hidden" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : ''}}></p>
 
           {medias.length > 0 && (
-            <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
+            <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 bg-black/5 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
               {isVideo ? (
-                // Otomatik Video Algılayıcı ve Oynatıcı
                 <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-95 transition-opacity" onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick([medias[0]], 0, 'video'); }}>
-                  <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted playsInline preload="metadata" />
-                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center pointer-events-none">
+                  {/* Kart üzerindeyken sessiz, controlsüz ve kapak gibi oynatılır */}
+                  <HlsVideoPlayer 
+                    src={medias[0]} 
+                    className="w-full h-full object-cover opacity-70" 
+                    muted={true} 
+                    controls={false}
+                    autoPlay={false} 
+                  />
+                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center pointer-events-none z-10">
                     <i className="fa-solid fa-play text-white text-xl ml-1"></i>
                   </div>
                 </div>
@@ -191,7 +250,7 @@
                     src={url} 
                     alt="Tweet Medya" 
                     onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick(medias, idx, 'image'); }}
-                    className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 transition-opacity" 
+                    className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 transition-opacity bg-slate-100" 
                     onError={(e) => e.target.style.display = 'none'} 
                   />
                 ))
@@ -344,7 +403,7 @@
       useEffect(() => { try { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); } catch(e){} }, [trash]); 
 
       const handleExportJSON = () => {
-        const payload = { app: "Kayitlik", version: "4.9", bookmarks, customFolders, customTags, trash };
+        const payload = { app: "Kayitlik", version: "5.0", bookmarks, customFolders, customTags, trash };
         const dataStr = JSON.stringify(payload, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -385,7 +444,6 @@
         const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
         const folderName = newFolder.trim() || "Genel";
         
-        // Form gönderilirken otomatik video algılama
         const detectedMediaType = newMediaUrls.match(/\.(mp4|webm|ogg|m3u8)/i) ? 'video' : newMediaType;
 
         const newBtn = {
@@ -921,17 +979,19 @@
             </div>
           </main>
 
-          {/* İSTEK 1 ve İSTEK 2: İndirme ve Video Özellikli Tam Ekran Modal */}
+          {/* TAM EKRAN MODAL */}
           {previewState && previewState.medias && (
             <div 
               className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter"
               onClick={() => setPreviewState(null)}
             >
-              {/* Oynatılabilir Video veya Yüksek Çözünürlüklü Resim */}
               {previewState.mediaType === 'video' || String(previewState.medias[previewState.currentIndex]).match(/\.(mp4|webm|ogg|m3u8)/i) ? (
-                <video 
+                // Tam Ekran Video Oynatıcı
+                <HlsVideoPlayer 
                   src={previewState.medias[previewState.currentIndex]} 
-                  controls autoPlay 
+                  controls={true}
+                  autoPlay={true}
+                  muted={false}
                   className="max-w-full max-h-[90vh] rounded-lg shadow-2xl transition-all outline-none" 
                   onClick={(e) => e.stopPropagation()}
                 />
@@ -964,7 +1024,6 @@
                 </>
               )}
 
-              {/* İSTEK 1: İndir Butonu */}
               <button 
                 onClick={(e) => { 
                   e.stopPropagation(); 
@@ -1077,7 +1136,7 @@
                   </div>
 
                   <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.9</span>
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v5.0</span>
                     <a 
                       href={focusedTweet.url} 
                       target="_blank"
