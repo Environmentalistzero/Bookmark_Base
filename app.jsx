@@ -373,7 +373,7 @@ function App() {
                 }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0' }}>
                     <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-6 h-6 flex items-center justify-center ${children.length === 0 && 'invisible'}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
                     <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
-                    <div className="flex items-center gap-1.5 pr-2"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
+                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
                 </div>
                 {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
             </div>
@@ -396,17 +396,23 @@ function App() {
                     <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
                 </div>
                 <div className="flex-1 overflow-y-auto py-6 px-4 space-y-6 custom-scrollbar">
-                    <ul className="space-y-0.5">
-                        <li><button onClick={() => setActiveFolder('All')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'All' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}><i className="fa-solid fa-layer-group"></i> All <span className="ml-auto text-xs font-bold opacity-60">{bookmarks.length}</span></button></li>
-                        <li><button onClick={() => setActiveFolder('Unsorted')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Unsorted' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}><i className="fa-solid fa-inbox"></i> Unsorted <span className="ml-auto text-xs font-bold opacity-60">{unsortedCount}</span></button></li>
-                    </ul>
+                    <div className="space-y-0.5">
+                        <div onClick={() => setActiveFolder('All')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
+                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-layer-group"></i> All Bookmarks</button>
+                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
+                        </div>
+                        <div onClick={() => setActiveFolder('Unsorted')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
+                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-inbox"></i> Unsorted</button>
+                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
+                        </div>
+                    </div>
                     <div>
-                        <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Folders</h2><button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
-                        <div className="space-y-0.5">{topLevelFolders.map(f => <FolderItem key={f.id} folder={f} />)}</div>
+                        <div className="flex justify-between items-center mb-2 px-2"><h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2><button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
+                        <div className="space-y-0">{topLevelFolders.map(f => <FolderItem key={f.id} folder={f} />)}</div>
                     </div>
                     <div>
                         <div className="flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
-                            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
+                            <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
                             <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
                         </div>
                         {isTagsExpanded && (
@@ -416,7 +422,7 @@ function App() {
                                     return (
                                         <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white shadow-sm' : 'hover:bg-slate-100'}`}>
                                             <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-3 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="w-2 h-2 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: tag.color }}></span> #{tag.name}</button>
-                                            <div className="flex items-center pr-3"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{bookmarks.filter(b => (b.tags || []).includes(tag.name)).length}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button></div>
+                                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{bookmarks.filter(b => (b.tags || []).includes(tag.name)).length}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button></div>
                                         </div>
                                     );
                                 }) : <div className="px-3 py-2 text-[11px] text-slate-400 italic">No tags yet</div>}
