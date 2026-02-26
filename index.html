@@ -59,14 +59,13 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
-    // Güvenlik Kalkanı: URL Parametreleri Çözerken Tarayıcının Çökmesini Engeller
     const safeDecode = (str) => {
       if (!str) return '';
       try {
         return decodeURIComponent(str);
       } catch (e) {
         console.warn("URL Çözümleme Hatası (Yoksayıldı):", str);
-        return str; // Hata verirse ham metni döndür, çökmeyi engelle
+        return str; 
       }
     };
 
@@ -90,6 +89,35 @@
         return match ? `@${match[1]}` : '@kullanici';
       } catch (e) {
         return '@kullanici';
+      }
+    };
+
+    const getHighResUrl = (url) => {
+      if (!url) return '';
+      if (url.includes('name=')) {
+        return url.replace(/name=[a-zA-Z0-9_]+/, 'name=large');
+      }
+      return url;
+    };
+
+    // İSTEK 1: Güvenli İndirme Fonksiyonu
+    const handleDownload = async (url) => {
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Ağ hatası');
+        const blob = await response.blob();
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = blobUrl;
+        a.download = url.split('/').pop().split('?')[0] || 'kayitlik_medya';
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(blobUrl);
+        document.body.removeChild(a);
+      } catch (err) {
+        console.error('CORS veya ağ hatası. Medya yeni sekmede açılıyor...', err);
+        window.open(url, '_blank');
       }
     };
 
@@ -121,39 +149,52 @@
       );
     };
 
-    const CustomTweetCard = ({ bookmark }) => {
+    // İSTEK 2: CustomTweetCard onClick metoduna mediaType eklendi
+    const CustomTweetCard = ({ bookmark, onImageClick }) => {
       const handle = bookmark.authorHandle || extractHandle(bookmark.url);
       const name = bookmark.authorName || handle;
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
       const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
 
       return (
-        <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow text-left">
+        <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left overflow-hidden">
           <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-3">
-              <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100" onError={(e) => { e.target.src = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'; }} />
-              <div className="flex flex-col">
-                <span className="font-bold text-slate-900 text-sm leading-tight hover:underline">{name}</span>
-                <span className="text-slate-500 text-xs">{handle}</span>
+            <div className="flex items-center gap-3 overflow-hidden pr-2">
+              <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100 shrink-0" onError={(e) => { e.target.src = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'; }} />
+              <div className="flex flex-col overflow-hidden">
+                <span className="font-bold text-slate-900 text-sm leading-tight hover:underline truncate">{name}</span>
+                <span className="text-slate-500 text-xs truncate">{handle}</span>
               </div>
             </div>
-            <i className="fa-brands fa-x-twitter text-slate-300 text-lg"></i>
+            <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
           </div>
 
-          <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : ''}}></p>
+          <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3 break-words overflow-hidden" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : ''}}></p>
 
           {medias.length > 0 && (
             <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 ${medias.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
               {bookmark.mediaType === 'video' ? (
-                <div className="relative w-full bg-black flex items-center justify-center aspect-video">
-                  <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
+                // Kart üzerinde hala kapak fotoğrafı gibi durur, tıklayınca videoyu modala paslar
+                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity" onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick([medias[0]], 0, 'video'); }}>
+                  {medias[0].includes('.mp4') ? (
+                    <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted />
+                  ) : (
+                    <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
+                  )}
                   <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center">
                     <i className="fa-solid fa-play text-white text-xl ml-1"></i>
                   </div>
                 </div>
               ) : (
                 medias.map((url, idx) => (
-                  <img key={idx} src={url} alt="Tweet Medya" className="w-full h-auto object-cover max-h-80" onError={(e) => e.target.style.display = 'none'} />
+                  <img 
+                    key={idx} 
+                    src={url} 
+                    alt="Tweet Medya" 
+                    onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick(medias, idx, 'image'); }}
+                    className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 transition-opacity" 
+                    onError={(e) => e.target.style.display = 'none'} 
+                  />
                 ))
               )}
             </div>
@@ -163,7 +204,6 @@
     };
 
     function App() {
-      // --- Veri Silinmesini Önleyen Güvenli Başlangıç (Initialization) ---
       const initialData = useMemo(() => {
         const safeParse = (key) => {
             try {
@@ -181,7 +221,6 @@
         let f = safeParse('tweetFolders_v1').filter(i => i && typeof i === 'object');
         let tg = safeParse('tweetTags_v1').filter(i => i && typeof i === 'object');
 
-        // Veri Bütünlüğü Koruması (Bozuk objeleri otomatik düzeltir)
         b.forEach(item => {
             if (!Array.isArray(item.tags)) item.tags = [];
             if (typeof item.folder !== 'string') item.folder = 'Genel';
@@ -189,11 +228,9 @@
             if (typeof item.tweetText !== 'string') item.tweetText = '';
         });
 
-        // Çöp Kutusu kontrolü
         const now = Date.now();
         t = t.filter(item => item.deletedAt && (now - item.deletedAt) < 30 * 24 * 60 * 60 * 1000);
 
-        // Otomatik Migration
         const existingNames = new Set(f.map(x => x.name));
         b.forEach(item => {
           if (item.folder && item.folder !== 'Tümü' && !existingNames.has(item.folder)) {
@@ -226,6 +263,9 @@
       const [isModalOpen, setIsModalOpen] = useState(false);
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
       const [focusedTweet, setFocusedTweet] = useState(null);
+      
+      // Preview state'i artık mediaType bilgisini de barındırıyor
+      const [previewState, setPreviewState] = useState(null); 
 
       const [newUrl, setNewUrl] = useState('');
       const [newFolder, setNewFolder] = useState('');
@@ -257,7 +297,6 @@
       const [focusEditTags, setFocusEditTags] = useState('');
       const [focusEditFolder, setFocusEditFolder] = useState('');
 
-      // Twitter Scriptini Ekle
       useEffect(() => {
         if (!window.twttr) {
           const script = document.createElement("script");
@@ -267,13 +306,11 @@
         }
       }, []);
 
-      // --- CHROME EXTENSION ENTEGRASYONU ---
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const extUrl = params.get('url');
         
         if (extUrl) {
-          // Parametreleri okurken safeDecode kullanarak tarayıcının çökmesini engelliyoruz
           setNewUrl(safeDecode(extUrl));
           setNewTweetText(safeDecode(params.get('text')));
           setNewAuthorName(safeDecode(params.get('authorName')));
@@ -287,14 +324,30 @@
         }
       }, []);
 
-      // Verileri Güvenli Kaydetme İşlemleri (Try-Catch blokları ile donatıldı)
+      useEffect(() => {
+        const handleKeyDown = (e) => {
+          if (!previewState || !previewState.medias) return;
+          
+          if (e.key === 'Escape') {
+            setPreviewState(null);
+          } else if (e.key === 'ArrowRight' && previewState.medias.length > 1) {
+            setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length}));
+          } else if (e.key === 'ArrowLeft' && previewState.medias.length > 1) {
+            setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length}));
+          }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+      }, [previewState]);
+
       useEffect(() => { try { localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks)); } catch(e){} }, [bookmarks]);
       useEffect(() => { try { localStorage.setItem('tweetFolders_v1', JSON.stringify(customFolders)); } catch(e){} }, [customFolders]);
       useEffect(() => { try { localStorage.setItem('tweetTags_v1', JSON.stringify(customTags)); } catch(e){} }, [customTags]);
       useEffect(() => { try { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); } catch(e){} }, [trash]); 
 
       const handleExportJSON = () => {
-        const payload = { app: "Kayitlik", version: "4.3", bookmarks, customFolders, customTags, trash };
+        const payload = { app: "Kayitlik", version: "4.8", bookmarks, customFolders, customTags, trash };
         const dataStr = JSON.stringify(payload, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -371,7 +424,6 @@
         setNewTweetText(''); setNewAuthorName(''); setNewAuthorHandle(''); setNewProfileImg(''); setNewMediaUrls(''); setNewMediaType('image');
       };
 
-      // --- ÇÖP KUTUSU İŞLEMLERİ ---
       const handleMoveToTrash = (e, id) => {
         e.stopPropagation();
         const item = bookmarks.find(b => b.id === id);
@@ -406,7 +458,6 @@
         }
       };
 
-      // --- KLASÖR / ETİKET YÖNETİMİ ---
       const handleSaveFolder = (e) => {
         e.preventDefault();
         const fName = folderNameInput.trim();
@@ -521,27 +572,27 @@
         });
       }, [bookmarks, trash, activeFolder, searchQuery]);
 
-      const gridClass = {
-        3: 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3',
-        4: 'grid-cols-1 md:grid-cols-3 lg:grid-cols-4',
-        5: 'grid-cols-1 md:grid-cols-3 lg:grid-cols-5'
+      const gridConfig = {
+        3: { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl' },
+        4: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4', padding: 'max-w-[90rem]' },
+        5: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5', padding: 'max-w-[120rem]' }
       }[gridCols];
 
       const pinnedFolders = customFolders.filter(f => f.isPinned);
       const unpinnedFolders = customFolders.filter(f => !f.isPinned);
 
       return (
-        <div className="flex h-screen w-full bg-gray-50 text-slate-800 font-sans overflow-hidden">
+        <div className="flex h-screen w-full bg-slate-50 text-slate-800 font-sans overflow-hidden">
           
           {isSidebarOpen && (
             <div className="fixed inset-0 bg-black/20 z-20 sm:hidden" onClick={() => setIsSidebarOpen(false)} />
           )}
 
           <aside className={`
-            fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-gray-100 flex flex-col transition-transform duration-300
-            ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full sm:translate-x-0'} sm:static sm:flex-shrink-0
+            fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300
+            ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full sm:translate-x-0'} sm:static sm:flex-shrink-0 shadow-sm
           `}>
-            <div className="p-6 flex items-center gap-3 border-b border-gray-50">
+            <div className="p-6 flex items-center gap-3 border-b border-slate-100">
               <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md">
                 <i className="fa-solid fa-bookmark text-white text-sm"></i>
               </div>
@@ -568,7 +619,6 @@
                   </li>
                 </ul>
 
-                {/* KLASÖRLER */}
                 <div className="mb-8">
                   <div className="flex justify-between items-center mb-3 px-2">
                     <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Klasörler</h2>
@@ -629,7 +679,6 @@
                   </ul>
                 </div>
 
-                {/* ETİKETLER */}
                 <div>
                   <div 
                     className="flex justify-between items-center mb-3 px-2 cursor-pointer select-none group" 
@@ -657,7 +706,7 @@
                             onClick={() => { setSearchQuery(searchQuery === tag.name ? '' : tag.name); setViewMode('grid'); }}
                             className={`flex-1 flex items-center gap-3 px-3 py-2 text-sm ${searchQuery === tag.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}
                           >
-                            <span className="w-2 h-2 rounded-full" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#fff' : tag.color }}></span>
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#fff' : tag.color }}></span>
                             <span className="truncate">#{tag.name}</span>
                           </button>
                           <div className="w-10 h-full flex items-center justify-end pr-3">
@@ -679,7 +728,6 @@
                 </div>
               </div>
 
-              {/* ÇÖP KUTUSU */}
               <div className="mt-8 pt-4 border-t border-slate-100">
                 <div className={`flex items-center justify-between rounded-xl overflow-hidden transition-all duration-200 ${activeFolder === 'Çöp Kutusu' ? 'bg-red-50' : 'hover:bg-red-50'}`}>
                   <button
@@ -711,7 +759,7 @@
           </aside>
 
           <main className="flex-1 flex flex-col h-screen min-w-0 relative bg-slate-50/50">
-            <header className="h-20 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-8 z-10 shrink-0">
+            <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-10 shrink-0">
               <div className="flex items-center gap-6">
                 <button className="sm:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}>
                   <i className="fa-solid fa-bars-staggered"></i>
@@ -776,88 +824,92 @@
               </div>
             </header>
 
-            <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
-              
-              <div className={`grid ${gridClass} gap-8 items-start`}>
-                {filteredBookmarks.map(b => (
-                  <div 
-                    key={b.id} 
-                    onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }}
-                    className={`group flex flex-col bg-transparent transition-all duration-300 relative ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer hover:-translate-y-1'}`}
-                  >
-                    <div className="flex justify-between items-center mb-2 px-1">
-                      <span className="px-2 py-0.5 bg-white border border-slate-200 text-[9px] font-bold uppercase tracking-wider text-slate-400 rounded flex items-center shadow-sm">
-                        <i className="fa-solid fa-folder mr-1.5 text-[8px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i>
-                        {b.folder}
-                      </span>
-                      
-                      {activeFolder === 'Çöp Kutusu' ? (
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                           <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-6 h-6 bg-white border border-slate-200 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle">
-                            <i className="fa-solid fa-rotate-left text-[9px]"></i>
-                           </button>
-                           <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-6 h-6 bg-white border border-slate-200 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil">
-                            <i className="fa-solid fa-trash text-[9px]"></i>
-                           </button>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={(e) => handleMoveToTrash(e, b.id)}
-                          className="w-6 h-6 bg-white border border-slate-200 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
-                          title="Çöpe At"
-                        >
-                          <i className="fa-solid fa-trash-can text-[9px]"></i>
-                        </button>
-                      )}
-                    </div>
-
-                    {b.tweetText ? (
-                      <CustomTweetCard bookmark={b} />
-                    ) : (
-                      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 pointer-events-none">
-                        <TweetEmbed tweetId={b.tweetId} />
+            <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
+              <div className={`mx-auto ${gridConfig.padding}`}>
+                <div className={`${gridConfig.cols} gap-6`}>
+                  
+                  {filteredBookmarks.map(b => (
+                    <div 
+                      key={b.id} 
+                      onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }}
+                      className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full max-w-[400px] ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer'}`}
+                    >
+                      <div className="p-3.5 flex justify-between items-center bg-white border-b border-slate-100 z-10">
+                        <span className="px-2.5 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-lg flex items-center">
+                          <i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i>
+                          {b.folder}
+                        </span>
+                        
+                        {activeFolder === 'Çöp Kutusu' ? (
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                             <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle">
+                              <i className="fa-solid fa-rotate-left text-[10px]"></i>
+                             </button>
+                             <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil">
+                              <i className="fa-solid fa-trash text-[10px]"></i>
+                             </button>
+                          </div>
+                        ) : (
+                          <button 
+                            onClick={(e) => handleMoveToTrash(e, b.id)}
+                            className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
+                            title="Çöpe At"
+                          >
+                            <i className="fa-solid fa-trash-can text-[10px]"></i>
+                          </button>
+                        )}
                       </div>
-                    )}
 
-                    <div className="mt-3 px-1 space-y-3">
-                      {b.description && (
-                        <div className="bg-white border border-slate-100 shadow-sm rounded-xl p-3">
-                          <p className="text-xs font-medium text-slate-800 leading-relaxed italic line-clamp-3">
-                            "{b.description}"
-                          </p>
-                        </div>
-                      )}
-                      
-                      <div className="flex items-center justify-between">
-                        <div className="flex flex-wrap gap-1.5">
-                          {(b.tags || []).map(tag => {
-                            const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
-                            return (
-                              <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-100 shadow-sm text-slate-500 rounded-lg text-[10px] font-semibold">
-                                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tagObj.color }}></span>
-                                {tag}
-                              </span>
-                            );
-                          })}
-                        </div>
-                        <a 
-                          href={b.url} 
-                          target="_blank" 
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-7 h-7 shrink-0 flex items-center justify-center bg-white border border-slate-100 shadow-sm text-slate-400 hover:text-black hover:bg-slate-50 rounded-lg transition-all"
-                        >
-                          <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
-                        </a>
+                      <div className="p-4 bg-slate-50 flex-1 border-b border-slate-100">
+                        {b.tweetText ? (
+                          <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type) => setPreviewState({ medias, currentIndex: idx, mediaType: type || b.mediaType })} />
+                        ) : (
+                          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 pointer-events-none">
+                            <TweetEmbed tweetId={b.tweetId} />
+                          </div>
+                        )}
                       </div>
-                      
-                      {activeFolder === 'Çöp Kutusu' && (
-                        <div className="text-[10px] text-red-400 text-center font-medium">
-                          Silinme: {new Date(b.deletedAt).toLocaleDateString('tr-TR')}
+
+                      <div className="p-4 bg-white flex flex-col gap-3">
+                        {b.description && (
+                          <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl">
+                            <p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">
+                              "{b.description}"
+                            </p>
+                          </div>
+                        )}
+                        
+                        <div className="flex items-end justify-between mt-1">
+                          <div className="flex flex-wrap gap-1.5 flex-1 pr-2">
+                            {(b.tags || []).map(tag => {
+                              const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
+                              return (
+                                <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate max-w-[150px]">
+                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span>
+                                  <span className="truncate">{tag}</span>
+                                </span>
+                              );
+                            })}
+                          </div>
+                          <a 
+                            href={b.url} 
+                            target="_blank" 
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-8 h-8 shrink-0 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black hover:bg-slate-50 rounded-xl transition-all"
+                          >
+                            <i className="fa-solid fa-arrow-up-right-from-square text-[11px]"></i>
+                          </a>
                         </div>
-                      )}
+                        
+                        {activeFolder === 'Çöp Kutusu' && (
+                          <div className="text-[10px] text-red-400 text-center font-medium mt-1">
+                            Silinme: {new Date(b.deletedAt).toLocaleDateString('tr-TR')}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
 
               {filteredBookmarks.length === 0 && (
@@ -868,6 +920,71 @@
               )}
             </div>
           </main>
+
+          {/* İSTEK 1 ve İSTEK 2: İndirme ve Video Özellikli Tam Ekran Modal */}
+          {previewState && previewState.medias && (
+            <div 
+              className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter"
+              onClick={() => setPreviewState(null)}
+            >
+              {/* Oynatılabilir Video veya Yüksek Çözünürlüklü Resim */}
+              {previewState.mediaType === 'video' || String(previewState.medias[previewState.currentIndex]).includes('.mp4') ? (
+                <video 
+                  src={previewState.medias[previewState.currentIndex]} 
+                  controls autoPlay 
+                  className="max-w-full max-h-[90vh] rounded-lg shadow-2xl transition-all outline-none" 
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <img 
+                  src={getHighResUrl(previewState.medias[previewState.currentIndex])} 
+                  alt="Tam Ekran Önizleme" 
+                  className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl transition-all" 
+                  onClick={(e) => e.stopPropagation()}
+                />
+              )}
+              
+              {previewState.medias.length > 1 && (
+                <>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length})); }}
+                    className="absolute left-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"
+                  >
+                    <i className="fa-solid fa-chevron-left text-xl"></i>
+                  </button>
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length})); }}
+                    className="absolute right-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"
+                  >
+                    <i className="fa-solid fa-chevron-right text-xl"></i>
+                  </button>
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs font-bold px-4 py-2 rounded-full backdrop-blur-md pointer-events-none">
+                    {previewState.currentIndex + 1} / {previewState.medias.length}
+                  </div>
+                </>
+              )}
+
+              {/* İSTEK 1: İndir Butonu */}
+              <button 
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  const targetUrl = previewState.mediaType === 'video' ? previewState.medias[previewState.currentIndex] : getHighResUrl(previewState.medias[previewState.currentIndex]);
+                  handleDownload(targetUrl);
+                }}
+                className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"
+                title="Cihaza İndir"
+              >
+                <i className="fa-solid fa-download text-lg"></i>
+              </button>
+
+              <button 
+                onClick={() => setPreviewState(null)}
+                className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"
+              >
+                <i className="fa-solid fa-xmark text-xl"></i>
+              </button>
+            </div>
+          )}
 
           {focusedTweet && (
             <div 
@@ -881,7 +998,9 @@
                 <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[300px]">
                    <div className="w-full max-w-lg mt-8">
                       {focusedTweet.tweetText ? (
-                        <div className="scale-110 transform origin-top"><CustomTweetCard bookmark={focusedTweet} /></div>
+                        <div className="scale-110 transform origin-top">
+                          <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType })} />
+                        </div>
                       ) : (
                         <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />
                       )}
@@ -936,7 +1055,7 @@
                       <>
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Senin Notun</h3>
                         <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8">
-                          <p className="text-slate-800 font-medium leading-relaxed italic">
+                          <p className="text-slate-800 font-medium leading-relaxed italic break-words">
                             {focusedTweet.description || "Bu tweet için bir not eklenmemiş."}
                           </p>
                         </div>
@@ -946,9 +1065,9 @@
                           {(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => {
                             const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
                             return (
-                              <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold">
-                                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: tagObj.color }}></span>
-                                {tag}
+                              <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]">
+                                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span>
+                                <span className="truncate">{tag}</span>
                               </span>
                             );
                           }) : <span className="text-slate-300 text-sm italic">Etiket yok</span>}
@@ -958,7 +1077,7 @@
                   </div>
 
                   <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.4</span>
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.8</span>
                     <a 
                       href={focusedTweet.url} 
                       target="_blank"
