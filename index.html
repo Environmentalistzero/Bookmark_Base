@@ -50,6 +50,7 @@
       from { opacity: 0; transform: scale(0.95); }
       to { opacity: 1; transform: scale(1); }
     }
+    .break-inside-avoid { break-inside: avoid; }
   </style>
 </head>
 <body class="bg-gray-50 text-slate-800 font-sans overflow-hidden">
@@ -125,9 +126,8 @@
       }
     };
 
-    // --- ÖZEL HLS VİDEO OYNATICI ---
-    // Twitter'ın .m3u8 formatlı videolarını oynatabilmek için HLS.js kullanıyoruz
-    const HlsVideoPlayer = ({ src, className, controls, autoPlay, muted, onClick }) => {
+    // --- ÖZEL HLS VİDEO OYNATICI (POSTER DESTEKLİ) ---
+    const HlsVideoPlayer = ({ src, poster, className, controls, autoPlay, muted, onClick }) => {
       const videoRef = useRef(null);
 
       useEffect(() => {
@@ -146,7 +146,6 @@
             }
           });
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          // Safari desteği
           video.src = src;
           video.addEventListener('loadedmetadata', () => {
             if (autoPlay) {
@@ -154,7 +153,6 @@
             }
           });
         } else {
-          // Normal mp4 vb.
           video.src = src;
         }
 
@@ -169,6 +167,7 @@
           className={className}
           controls={controls}
           muted={muted}
+          poster={poster}
           onClick={onClick}
           playsInline
           preload="metadata"
@@ -210,7 +209,9 @@
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
       const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
       
-      const isVideo = bookmark.mediaType === 'video' || medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
+      // Akıllı Video Algılama: Link MP4 mü yoksa fallback poster mi?
+      const isActuallyVideoLink = medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
+      const isVideo = bookmark.mediaType === 'video' || isActuallyVideoLink;
 
       return (
         <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left overflow-hidden">
@@ -230,15 +231,20 @@
           {medias.length > 0 && (
             <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 bg-black/5 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
               {isVideo ? (
-                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-95 transition-opacity" onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick([medias[0]], 0, 'video'); }}>
-                  {/* Kart üzerindeyken sessiz, controlsüz ve kapak gibi oynatılır */}
-                  <HlsVideoPlayer 
-                    src={medias[0]} 
-                    className="w-full h-full object-cover opacity-70" 
-                    muted={true} 
-                    controls={false}
-                    autoPlay={false} 
-                  />
+                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-95 transition-opacity" onClick={(e) => { e.stopPropagation(); onImageClick(medias, 0, 'video', bookmark.posterUrl); }}>
+                  {isActuallyVideoLink ? (
+                    <HlsVideoPlayer 
+                      src={medias[0]} 
+                      poster={bookmark.posterUrl || medias[0]}
+                      className="w-full h-full object-cover opacity-70" 
+                      muted={true} 
+                      controls={false}
+                      autoPlay={false} 
+                    />
+                  ) : (
+                    // B Planı: Sadece poster var, video linki çekilemedi
+                    <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
+                  )}
                   <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center pointer-events-none z-10">
                     <i className="fa-solid fa-play text-white text-xl ml-1"></i>
                   </div>
@@ -249,7 +255,7 @@
                     key={idx} 
                     src={url} 
                     alt="Tweet Medya" 
-                    onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick(medias, idx, 'image'); }}
+                    onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }}
                     className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 transition-opacity bg-slate-100" 
                     onError={(e) => e.target.style.display = 'none'} 
                   />
@@ -334,6 +340,7 @@
       const [newProfileImg, setNewProfileImg] = useState('');
       const [newMediaUrls, setNewMediaUrls] = useState('');
       const [newMediaType, setNewMediaType] = useState('image');
+      const [newPosterUrl, setNewPosterUrl] = useState(''); // Yeni: Poster desteği
 
       const [customFolders, setCustomFolders] = useState(initialData.folders);
       const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -374,6 +381,7 @@
           setNewProfileImg(safeDecode(params.get('profileImg')));
           setNewMediaUrls(safeDecode(params.get('mediaUrls')));
           setNewMediaType(safeDecode(params.get('mediaType')) || 'image');
+          setNewPosterUrl(safeDecode(params.get('posterUrl')));
 
           setIsModalOpen(true);
           window.history.replaceState({}, document.title, window.location.pathname);
@@ -383,7 +391,6 @@
       useEffect(() => {
         const handleKeyDown = (e) => {
           if (!previewState || !previewState.medias) return;
-          
           if (e.key === 'Escape') {
             setPreviewState(null);
           } else if (e.key === 'ArrowRight' && previewState.medias.length > 1) {
@@ -392,7 +399,6 @@
             setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length}));
           }
         };
-
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
       }, [previewState]);
@@ -459,6 +465,7 @@
           profileImg: newProfileImg.trim(),
           mediaUrls: newMediaUrls.trim(),
           mediaType: detectedMediaType,
+          posterUrl: newPosterUrl.trim(),
           date: new Date().toLocaleDateString('tr-TR')
         };
 
@@ -479,7 +486,7 @@
         setBookmarks([newBtn, ...bookmarks]);
         setIsModalOpen(false);
         setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc(''); 
-        setNewTweetText(''); setNewAuthorName(''); setNewAuthorHandle(''); setNewProfileImg(''); setNewMediaUrls(''); setNewMediaType('image');
+        setNewTweetText(''); setNewAuthorName(''); setNewAuthorHandle(''); setNewProfileImg(''); setNewMediaUrls(''); setNewMediaType('image'); setNewPosterUrl('');
       };
 
       const handleMoveToTrash = (e, id) => {
@@ -616,11 +623,9 @@
       
       const filteredBookmarks = useMemo(() => {
         const sourceList = activeFolder === 'Çöp Kutusu' ? trash : bookmarks;
-        
         return sourceList.filter(b => {
           const mF = activeFolder === 'Tümü' || activeFolder === 'Çöp Kutusu' || b.folder === activeFolder;
           const sL = searchQuery.toLowerCase();
-          
           return mF && (!sL || 
             (b.tags || []).some(t => (t||'').includes(sL)) || 
             (b.description || '').toLowerCase().includes(sL) || 
@@ -738,32 +743,19 @@
                 </div>
 
                 <div>
-                  <div 
-                    className="flex justify-between items-center mb-3 px-2 cursor-pointer select-none group" 
-                    onClick={() => setIsTagsExpanded(!isTagsExpanded)}
-                  >
+                  <div className="flex justify-between items-center mb-3 px-2 cursor-pointer select-none group" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
                     <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2 group-hover:text-slate-600 transition-colors">
-                      <i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[10px] w-3`}></i> 
-                      Etiketler
+                      <i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[10px] w-3`}></i> Etiketler
                     </h2>
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} 
-                      className="text-slate-400 hover:text-black transition-colors p-1" 
-                      title="Yeni Etiket Ekle"
-                    >
+                    <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="text-slate-400 hover:text-black transition-colors p-1" title="Yeni Etiket Ekle">
                       <i className="fa-solid fa-plus text-xs"></i>
                     </button>
                   </div>
-                  
                   {isTagsExpanded && (
                     <div className="flex flex-col space-y-1">
                       {customTags.map(tag => (
-                        <div key={tag.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden"
-                             style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#000' : '' }}>
-                          <button 
-                            onClick={() => { setSearchQuery(searchQuery === tag.name ? '' : tag.name); setViewMode('grid'); }}
-                            className={`flex-1 flex items-center gap-3 px-3 py-2 text-sm ${searchQuery === tag.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}
-                          >
+                        <div key={tag.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#000' : '' }}>
+                          <button onClick={() => { setSearchQuery(searchQuery === tag.name ? '' : tag.name); setViewMode('grid'); }} className={`flex-1 flex items-center gap-3 px-3 py-2 text-sm ${searchQuery === tag.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}>
                             <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#fff' : tag.color }}></span>
                             <span className="truncate">#{tag.name}</span>
                           </button>
@@ -771,11 +763,7 @@
                              <span className={`text-[10px] group-hover:hidden ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
                                {bookmarks.filter(b => (b.tags||[]).includes(tag.name)).length}
                              </span>
-                             <button 
-                              onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color || '#64748b'); setIsTagModalOpen(true); }}
-                              className={`hidden group-hover:flex p-1 ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-blue-500'} transition-opacity`}
-                              title="Etiketi Düzenle"
-                            >
+                             <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color || '#64748b'); setIsTagModalOpen(true); }} className={`hidden group-hover:flex p-1 ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-blue-500'} transition-opacity`} title="Etiketi Düzenle">
                               <i className="fa-solid fa-pen text-[10px]"></i>
                             </button>
                           </div>
@@ -788,363 +776,158 @@
 
               <div className="mt-8 pt-4 border-t border-slate-100">
                 <div className={`flex items-center justify-between rounded-xl overflow-hidden transition-all duration-200 ${activeFolder === 'Çöp Kutusu' ? 'bg-red-50' : 'hover:bg-red-50'}`}>
-                  <button
-                    onClick={() => { setActiveFolder('Çöp Kutusu'); setViewMode('grid'); setIsSidebarOpen(false); }}
-                    className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === 'Çöp Kutusu' ? 'text-red-600 font-medium' : 'text-slate-500 hover:text-red-500'}`}
-                  >
+                  <button onClick={() => { setActiveFolder('Çöp Kutusu'); setViewMode('grid'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === 'Çöp Kutusu' ? 'text-red-600 font-medium' : 'text-slate-500 hover:text-red-500'}`}>
                     <i className="fa-solid fa-trash-can"></i>
                     <span className="truncate">Çöp Kutusu</span>
-                    {trash.length > 0 && (
-                      <span className="text-[10px] font-bold bg-red-100 text-red-500 px-2 py-0.5 rounded-full">
-                        {trash.length}
-                      </span>
-                    )}
+                    {trash.length > 0 && <span className="text-[10px] font-bold bg-red-100 text-red-500 px-2 py-0.5 rounded-full">{trash.length}</span>}
                   </button>
-                  
-                  {trash.length > 0 && (
-                    <button 
-                      onClick={emptyTrash} 
-                      className="px-3 py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-100 transition-colors"
-                      title="Çöp Kutusunu Boşalt"
-                    >
-                      <i className="fa-solid fa-broom text-xs"></i>
-                    </button>
-                  )}
+                  {trash.length > 0 && <button onClick={emptyTrash} className="px-3 py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-100 transition-colors" title="Çöp Kutusunu Boşalt"><i className="fa-solid fa-broom text-xs"></i></button>}
                 </div>
               </div>
-
             </div>
           </aside>
 
           <main className="flex-1 flex flex-col h-screen min-w-0 relative bg-slate-50/50">
             <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-10 shrink-0">
               <div className="flex items-center gap-6">
-                <button className="sm:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}>
-                  <i className="fa-solid fa-bars-staggered"></i>
-                </button>
+                <button className="sm:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button>
                 <div>
-                  <h2 className="text-lg font-bold text-slate-900 capitalize hidden sm:block">
-                    {activeFolder}
-                  </h2>
-                  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider hidden sm:block">
-                    {filteredBookmarks.length} Kayıt
-                  </p>
+                  <h2 className="text-lg font-bold text-slate-900 capitalize hidden sm:block">{activeFolder}</h2>
+                  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider hidden sm:block">{filteredBookmarks.length} Kayıt</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-4 sm:gap-6">
-                
                 {viewMode === 'grid' && activeFolder !== 'Çöp Kutusu' && (
                   <div className="relative hidden md:block">
                     <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
-                    <input 
-                      type="text" placeholder="İçerik, not, etiket ara..." 
-                      value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-                      className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all"
-                    />
-                    {searchQuery && (
-                      <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                        <i className="fa-solid fa-times text-xs"></i>
-                      </button>
-                    )}
+                    <input type="text" placeholder="İçerik, not, etiket ara..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all" />
+                    {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><i className="fa-solid fa-times text-xs"></i></button>}
                   </div>
                 )}
-
                 <div className="flex bg-slate-100 rounded-full p-1 hidden sm:flex">
-                  <button onClick={handleExportJSON} title="Tüm Arşivi İndir" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all">
-                    <i className="fa-solid fa-download text-xs"></i>
-                  </button>
-                  <label title="Arşivi Yükle" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all cursor-pointer">
-                    <i className="fa-solid fa-upload text-xs"></i>
-                    <input type="file" accept=".json" className="hidden" onChange={handleImportJSON} />
-                  </label>
+                  <button onClick={handleExportJSON} title="Tüm Arşivi İndir" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all"><i className="fa-solid fa-download text-xs"></i></button>
+                  <label title="Arşivi Yükle" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all cursor-pointer"><i className="fa-solid fa-upload text-xs"></i><input type="file" accept=".json" className="hidden" onChange={handleImportJSON} /></label>
                 </div>
-
                 {viewMode === 'grid' && (
                   <div className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                    {[3, 4, 5].map(n => (
-                      <button 
-                        key={n} onClick={() => setGridCols(n)}
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all ${gridCols === n ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}
-                      >
-                        {n}X
-                      </button>
-                    ))}
+                    {[3, 4, 5].map(n => <button key={n} onClick={() => setGridCols(n)} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all ${gridCols === n ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}>{n}X</button>)}
                   </div>
                 )}
-
-                <button 
-                  onClick={() => setIsModalOpen(true)}
-                  className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"
-                >
-                  <i className="fa-solid fa-plus mr-2"></i> YENİ
-                </button>
+                <button onClick={() => setIsModalOpen(true)} className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-plus mr-2"></i> YENİ</button>
               </div>
             </header>
 
             <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
               <div className={`mx-auto ${gridConfig.padding}`}>
                 <div className={`${gridConfig.cols} gap-6`}>
-                  
                   {filteredBookmarks.map(b => (
-                    <div 
-                      key={b.id} 
-                      onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }}
-                      className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full max-w-[400px] ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer'}`}
-                    >
+                    <div key={b.id} onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full max-w-[400px] ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer'}`}>
                       <div className="p-3.5 flex justify-between items-center bg-white border-b border-slate-100 z-10">
-                        <span className="px-2.5 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-lg flex items-center">
-                          <i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i>
-                          {b.folder}
-                        </span>
-                        
+                        <span className="px-2.5 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-lg flex items-center"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder}</span>
                         {activeFolder === 'Çöp Kutusu' ? (
                           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                             <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle">
-                              <i className="fa-solid fa-rotate-left text-[10px]"></i>
-                             </button>
-                             <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil">
-                              <i className="fa-solid fa-trash text-[10px]"></i>
-                             </button>
+                             <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle"><i className="fa-solid fa-rotate-left text-[10px]"></i></button>
+                             <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil"><i className="fa-solid fa-trash text-[10px]"></i></button>
                           </div>
                         ) : (
-                          <button 
-                            onClick={(e) => handleMoveToTrash(e, b.id)}
-                            className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
-                            title="Çöpe At"
-                          >
-                            <i className="fa-solid fa-trash-can text-[10px]"></i>
-                          </button>
+                          <button onClick={(e) => handleMoveToTrash(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Çöpe At"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
                         )}
                       </div>
-
                       <div className="p-4 bg-slate-50 flex-1 border-b border-slate-100">
-                        {b.tweetText ? (
-                          <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type) => setPreviewState({ medias, currentIndex: idx, mediaType: type || b.mediaType })} />
-                        ) : (
-                          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 pointer-events-none">
-                            <TweetEmbed tweetId={b.tweetId} />
-                          </div>
-                        )}
+                        {b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || b.mediaType, poster })} /> : <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 pointer-events-none"><TweetEmbed tweetId={b.tweetId} /></div>}
                       </div>
-
                       <div className="p-4 bg-white flex flex-col gap-3">
-                        {b.description && (
-                          <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl">
-                            <p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">
-                              "{b.description}"
-                            </p>
-                          </div>
-                        )}
-                        
+                        {b.description && <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">"{b.description}"</p></div>}
                         <div className="flex items-end justify-between mt-1">
-                          <div className="flex flex-wrap gap-1.5 flex-1 pr-2">
-                            {(b.tags || []).map(tag => {
-                              const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
-                              return (
-                                <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate max-w-[150px]">
-                                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span>
-                                  <span className="truncate">{tag}</span>
-                                </span>
-                              );
-                            })}
-                          </div>
-                          <a 
-                            href={b.url} 
-                            target="_blank" 
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-8 h-8 shrink-0 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black hover:bg-slate-50 rounded-xl transition-all"
-                          >
-                            <i className="fa-solid fa-arrow-up-right-from-square text-[11px]"></i>
-                          </a>
+                          <div className="flex flex-wrap gap-1.5 flex-1 pr-2">{(b.tags || []).map(tag => { const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' }; return <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate max-w-[150px]"><span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span> <span className="truncate">{tag}</span></span>; })}</div>
+                          <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-8 h-8 shrink-0 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black hover:bg-slate-50 rounded-xl transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[11px]"></i></a>
                         </div>
-                        
-                        {activeFolder === 'Çöp Kutusu' && (
-                          <div className="text-[10px] text-red-400 text-center font-medium mt-1">
-                            Silinme: {new Date(b.deletedAt).toLocaleDateString('tr-TR')}
-                          </div>
-                        )}
                       </div>
                     </div>
                   ))}
                 </div>
               </div>
-
-              {filteredBookmarks.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-20 opacity-30">
-                  <i className={`fa-solid ${activeFolder === 'Çöp Kutusu' ? 'fa-trash-can' : 'fa-layer-group'} text-4xl mb-4`}></i>
-                  <p className="text-sm font-bold uppercase tracking-widest">{activeFolder === 'Çöp Kutusu' ? 'Çöp Kutusu Boş' : 'İçerik Bulunamadı'}</p>
-                </div>
-              )}
+              {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className={`fa-solid ${activeFolder === 'Çöp Kutusu' ? 'fa-trash-can' : 'fa-layer-group'} text-4xl mb-4`}></i><p className="text-sm font-bold uppercase tracking-widest">{activeFolder === 'Çöp Kutusu' ? 'Çöp Kutusu Boş' : 'İçerik Bulunamadı'}</p></div>}
             </div>
           </main>
 
-          {/* TAM EKRAN MODAL */}
+          {/* TAM EKRAN MODAL (A VE B PLANI DESTEKLİ) */}
           {previewState && previewState.medias && (
-            <div 
-              className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter"
-              onClick={() => setPreviewState(null)}
-            >
-              {previewState.mediaType === 'video' || String(previewState.medias[previewState.currentIndex]).match(/\.(mp4|webm|ogg|m3u8)/i) ? (
-                // Tam Ekran Video Oynatıcı
-                <HlsVideoPlayer 
-                  src={previewState.medias[previewState.currentIndex]} 
-                  controls={true}
-                  autoPlay={true}
-                  muted={false}
-                  className="max-w-full max-h-[90vh] rounded-lg shadow-2xl transition-all outline-none" 
-                  onClick={(e) => e.stopPropagation()}
-                />
+            <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}>
+              {previewState.mediaType === 'video' ? (
+                // Eğer mp4 veya m3u8 linki varsa gerçek oynatıcıyı aç, yoksa görsel fallback göster
+                String(previewState.medias[previewState.currentIndex]).match(/\.(mp4|webm|ogg|m3u8)/i) ? (
+                  <HlsVideoPlayer 
+                    src={previewState.medias[previewState.currentIndex]} 
+                    poster={previewState.poster}
+                    controls={true}
+                    autoPlay={true}
+                    muted={false}
+                    className="max-w-full max-h-[90vh] rounded-lg shadow-2xl transition-all outline-none" 
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  // B Planı: Video olarak işaretlenmiş ama sadece görsel (Poster) gelmiş
+                  <div className="relative" onClick={(e) => e.stopPropagation()}>
+                    <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" />
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg">
+                       <div className="bg-white/90 p-6 rounded-2xl text-center shadow-xl max-w-xs scale-90 sm:scale-100">
+                          <i className="fa-solid fa-video-slash text-slate-400 text-3xl mb-3"></i>
+                          <p className="text-slate-800 font-bold text-sm mb-4">Video Linki Alınamadı</p>
+                          <p className="text-slate-500 text-xs mb-6 leading-relaxed text-center">API sınırı veya hesap kilitli olduğu için video oynatılamıyor. Orijinal sayfada izleyebilirsin.</p>
+                          <a href={focusedTweet?.url} target="_blank" className="inline-block bg-black text-white px-6 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all">X'te Görüntüle</a>
+                       </div>
+                    </div>
+                  </div>
+                )
               ) : (
-                <img 
-                  src={getHighResUrl(previewState.medias[previewState.currentIndex])} 
-                  alt="Tam Ekran Önizleme" 
-                  className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl transition-all" 
-                  onClick={(e) => e.stopPropagation()}
-                />
+                <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} alt="Tam Ekran Önizleme" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl transition-all" onClick={(e) => e.stopPropagation()} />
               )}
               
               {previewState.medias.length > 1 && (
                 <>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length})); }}
-                    className="absolute left-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"
-                  >
-                    <i className="fa-solid fa-chevron-left text-xl"></i>
-                  </button>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length})); }}
-                    className="absolute right-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"
-                  >
-                    <i className="fa-solid fa-chevron-right text-xl"></i>
-                  </button>
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs font-bold px-4 py-2 rounded-full backdrop-blur-md pointer-events-none">
-                    {previewState.currentIndex + 1} / {previewState.medias.length}
-                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length})); }} className="absolute left-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"><i className="fa-solid fa-chevron-left text-xl"></i></button>
+                  <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length})); }} className="absolute right-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"><i className="fa-solid fa-chevron-right text-xl"></i></button>
+                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs font-bold px-4 py-2 rounded-full backdrop-blur-md pointer-events-none">{previewState.currentIndex + 1} / {previewState.medias.length}</div>
                 </>
               )}
 
-              <button 
-                onClick={(e) => { 
-                  e.stopPropagation(); 
-                  const targetUrl = previewState.mediaType === 'video' ? previewState.medias[previewState.currentIndex] : getHighResUrl(previewState.medias[previewState.currentIndex]);
-                  handleDownload(targetUrl);
-                }}
-                className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"
-                title="Cihaza İndir"
-              >
-                <i className="fa-solid fa-download text-lg"></i>
-              </button>
-
-              <button 
-                onClick={() => setPreviewState(null)}
-                className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"
-              >
-                <i className="fa-solid fa-xmark text-xl"></i>
-              </button>
+              <button onClick={(e) => { e.stopPropagation(); const targetUrl = previewState.mediaType === 'video' ? previewState.medias[previewState.currentIndex] : getHighResUrl(previewState.medias[previewState.currentIndex]); handleDownload(targetUrl); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm" title="Cihaza İndir"><i className="fa-solid fa-download text-lg"></i></button>
+              <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"><i className="fa-solid fa-xmark text-xl"></i></button>
             </div>
           )}
 
           {focusedTweet && (
-            <div 
-              className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto"
-              onClick={() => setFocusedTweet(null)}
-            >
-              <div 
-                className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row max-h-[90vh]"
-                onClick={(e) => e.stopPropagation()}
-              >
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
+              <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
                 <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[300px]">
                    <div className="w-full max-w-lg mt-8">
-                      {focusedTweet.tweetText ? (
-                        <div className="scale-110 transform origin-top">
-                          <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType })} />
-                        </div>
-                      ) : (
-                        <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />
-                      )}
+                      {focusedTweet.tweetText ? <div className="scale-110 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />}
                    </div>
                 </div>
-
                 <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
                   <div>
-                    <div className="flex justify-between items-start mb-8">
-                      <span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center">
-                        <i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i>
-                        {focusedTweet.folder}
-                      </span>
-                      <div className="flex gap-2">
-                        {!isEditingFocus && (
-                          <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400" title="Düzenle">
-                            <i className="fa-solid fa-pen text-sm"></i>
-                          </button>
-                        )}
-                        <button 
-                          onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} 
-                          className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"
-                        >
-                          <i className="fa-solid fa-times text-lg"></i>
-                        </button>
-                      </div>
+                    <div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder}</span>
+                      <div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400" title="Düzenle"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div>
                     </div>
-
                     {isEditingFocus ? (
                       <div className="space-y-4 mb-8">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Senin Notun</label>
-                          <textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea>
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Klasör</label>
-                          <input type="text" value={focusEditFolder} onChange={e => setFocusEditFolder(e.target.value)} list="focus-folder-options" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" />
-                          <datalist id="focus-folder-options">
-                            {customFolders.map(f => <option key={f.id} value={f.name} />)}
-                          </datalist>
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Etiketler (Virgülle)</label>
-                          <input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" />
-                        </div>
-                        <div className="flex gap-2 pt-2">
-                          <button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">KAYDET</button>
-                          <button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">İPTAL</button>
-                        </div>
+                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Senin Notun</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
+                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Klasör</label><input type="text" value={focusEditFolder} onChange={e => setFocusEditFolder(e.target.value)} list="focus-folder-options" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /><datalist id="focus-folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist></div>
+                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Etiketler (Virgülle)</label><input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /></div>
+                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">KAYDET</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">İPTAL</button></div>
                       </div>
                     ) : (
                       <>
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Senin Notun</h3>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8">
-                          <p className="text-slate-800 font-medium leading-relaxed italic break-words">
-                            {focusedTweet.description || "Bu tweet için bir not eklenmemiş."}
-                          </p>
-                        </div>
-
+                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed italic break-words">{focusedTweet.description || "Bu tweet için bir not eklenmemiş."}</p></div>
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Etiketler</h3>
-                        <div className="flex flex-wrap gap-2 mb-8">
-                          {(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => {
-                            const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
-                            return (
-                              <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]">
-                                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span>
-                                <span className="truncate">{tag}</span>
-                              </span>
-                            );
-                          }) : <span className="text-slate-300 text-sm italic">Etiket yok</span>}
-                        </div>
+                        <div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => { const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' }; return <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span> <span className="truncate">{tag}</span></span>; }) : <span className="text-slate-300 text-sm italic">Etiket yok</span>}</div>
                       </>
                     )}
                   </div>
-
-                  <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v5.0</span>
-                    <a 
-                      href={focusedTweet.url} 
-                      target="_blank"
-                      className="flex items-center gap-2 bg-black text-white px-5 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95"
-                    >
-                      X'TE AÇ <i className="fa-solid fa-external-link"></i>
-                    </a>
-                  </div>
+                  <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto"><span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v5.1</span><a href={focusedTweet.url} target="_blank" className="flex items-center gap-2 bg-black text-white px-5 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">X'TE AÇ <i className="fa-solid fa-external-link"></i></a></div>
                 </div>
               </div>
             </div>
@@ -1153,58 +936,26 @@
           {isModalOpen && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
               <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-                <div className="p-6 border-b border-gray-50 flex justify-between items-center">
-                  <h3 className="font-bold text-slate-900">Yer İmi Ekle</h3>
-                  <button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all">
-                    <i className="fa-solid fa-times text-slate-400"></i>
-                  </button>
-                </div>
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Yer İmi Ekle</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
                 <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
-                  <input 
-                    type="url" required placeholder="Tweet URL" 
-                    value={newUrl} onChange={e => setNewUrl(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
-                  />
+                  <input type="url" required placeholder="Tweet URL" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" />
                   <div className="grid grid-cols-2 gap-4">
-                    <input 
-                      type="text" placeholder="Klasör" 
-                      value={newFolder} onChange={e => setNewFolder(e.target.value)}
-                      list="folder-options"
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
-                    />
-                    <datalist id="folder-options">
-                      {customFolders.map(f => <option key={f.id} value={f.name} />)}
-                    </datalist>
-                    <input 
-                      type="text" placeholder="Etiketler" 
-                      value={newTags} onChange={e => setNewTags(e.target.value)}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
-                    />
+                    <input type="text" placeholder="Klasör" value={newFolder} onChange={e => setNewFolder(e.target.value)} list="folder-options" className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" /><datalist id="folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist>
+                    <input type="text" placeholder="Etiketler" value={newTags} onChange={e => setNewTags(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" />
                   </div>
-                  
                   <div className="h-24 overflow-y-auto custom-scrollbar border border-dashed border-slate-200 rounded-xl p-2 bg-slate-50">
                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Gelişmiş Veriler (Eklenti Otomatik Doldurur)</p>
                     <div className="space-y-2 px-1">
-                      <input type="text" placeholder="Yazar Adı (Örn: Elon Musk)" value={newAuthorName} onChange={e => setNewAuthorName(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Kullanıcı Adı (Örn: @elonmusk)" value={newAuthorHandle} onChange={e => setNewAuthorHandle(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Profil Resmi Linki" value={newProfileImg} onChange={e => setNewProfileImg(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Medya Linkleri (Virgülle ayırın)" value={newMediaUrls} onChange={e => setNewMediaUrls(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <select value={newMediaType} onChange={e => setNewMediaType(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none">
-                        <option value="image">Görsel (Image)</option>
-                        <option value="video">Video</option>
-                      </select>
+                      <input type="text" placeholder="Yazar Adı" value={newAuthorName} onChange={e => setNewAuthorName(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Kullanıcı Adı" value={newAuthorHandle} onChange={e => setNewAuthorHandle(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Görsel / Video Linkleri" value={newMediaUrls} onChange={e => setNewMediaUrls(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Kapak Fotoğrafı (Poster) Linki" value={newPosterUrl} onChange={e => setNewPosterUrl(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <select value={newMediaType} onChange={e => setNewMediaType(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none"><option value="image">Görsel (Image)</option><option value="video">Video</option></select>
                       <textarea placeholder="Tweet Metni" rows="2" value={newTweetText} onChange={e => setNewTweetText(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none resize-none" />
                     </div>
                   </div>
-
-                  <textarea 
-                    placeholder="Senin Notların..." rows="3"
-                    value={newDesc} onChange={e => setNewDesc(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all"
-                  />
-                  <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg hover:bg-slate-800 active:scale-95 transition-all">
-                    Koleksiyona Ekle
-                  </button>
+                  <textarea placeholder="Senin Notların..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all" />
+                  <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg hover:bg-slate-800 active:scale-95 transition-all">Koleksiyona Ekle</button>
                 </form>
               </div>
             </div>
@@ -1213,57 +964,11 @@
           {(isFolderModalOpen || isTagModalOpen) && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
               <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-                <div className="p-6 border-b border-gray-50 flex justify-between items-center">
-                  <h3 className="font-bold text-slate-900">
-                    {isFolderModalOpen 
-                      ? (editingFolder ? 'Klasörü Düzenle' : 'Yeni Klasör') 
-                      : (editingTag ? 'Etiketi Düzenle' : 'Yeni Etiket')}
-                  </h3>
-                  <button onClick={() => { setIsFolderModalOpen(false); setIsTagModalOpen(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all">
-                    <i className="fa-solid fa-times text-slate-400"></i>
-                  </button>
-                </div>
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{isFolderModalOpen ? (editingFolder ? 'Klasörü Düzenle' : 'Yeni Klasör') : (editingTag ? 'Etiketi Düzenle' : 'Yeni Etiket')}</h3><button onClick={() => { setIsFolderModalOpen(false); setIsTagModalOpen(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
                 <form onSubmit={isFolderModalOpen ? handleSaveFolder : handleSaveTag} className="p-6 space-y-4">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">
-                      {isFolderModalOpen ? 'Klasör Adı' : 'Etiket Adı'}
-                    </label>
-                    <input 
-                      type="text" required placeholder={isFolderModalOpen ? 'Örn: Tasarım' : 'Örn: ui-ux'} 
-                      value={isFolderModalOpen ? folderNameInput : tagNameInput} 
-                      onChange={e => isFolderModalOpen ? setFolderNameInput(e.target.value) : setTagNameInput(e.target.value)}
-                      className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Renk Seçimi</label>
-                    <div className="flex items-center gap-3">
-                      <input 
-                        type="color" 
-                        value={isFolderModalOpen ? folderColorInput : tagColorInput} 
-                        onChange={e => isFolderModalOpen ? setFolderColorInput(e.target.value) : setTagColorInput(e.target.value)}
-                        className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer"
-                      />
-                      <span className="text-sm font-medium text-slate-600 uppercase">
-                        {isFolderModalOpen ? folderColorInput : tagColorInput}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 pt-4">
-                    <button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg hover:bg-slate-800 active:scale-95 transition-all">
-                      KAYDET
-                    </button>
-                    {(isFolderModalOpen && editingFolder) && (
-                      <button type="button" onClick={() => handleDeleteFolder(editingFolder.id, editingFolder.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">
-                        SİL
-                      </button>
-                    )}
-                    {(isTagModalOpen && editingTag) && (
-                      <button type="button" onClick={() => handleDeleteTag(editingTag.id, editingTag.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">
-                        SİL
-                      </button>
-                    )}
-                  </div>
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">{isFolderModalOpen ? 'Klasör Adı' : 'Etiket Adı'}</label><input type="text" required placeholder={isFolderModalOpen ? 'Örn: Tasarım' : 'Örn: ui-ux'} value={isFolderModalOpen ? folderNameInput : tagNameInput} onChange={e => isFolderModalOpen ? setFolderNameInput(e.target.value) : setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Renk Seçimi</label><div className="flex items-center gap-3"><input type="color" value={isFolderModalOpen ? folderColorInput : tagColorInput} onChange={e => isFolderModalOpen ? setFolderColorInput(e.target.value) : setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer" /><span className="text-sm font-medium text-slate-600 uppercase">{isFolderModalOpen ? folderColorInput : tagColorInput}</span></div></div>
+                  <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg hover:bg-slate-800 active:scale-95 transition-all">KAYDET</button>{(isFolderModalOpen && editingFolder) && (<button type="button" onClick={() => handleDeleteFolder(editingFolder.id, editingFolder.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">SİL</button>)}{(isTagModalOpen && editingTag) && (<button type="button" onClick={() => handleDeleteTag(editingTag.id, editingTag.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">SİL</button>)}</div>
                 </form>
               </div>
             </div>
