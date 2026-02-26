@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="no-referrer">
-  <title>Kayıtlık - Minimal Modern Arşiv</title>
+  <title>Tweetmark - Smart Archive</title>
   
   <style id="antiClickjack">
     body { display: none !important; }
@@ -27,10 +27,7 @@
 
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
-  <!-- HLS.js for playing Twitter m3u8 videos -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-  
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
@@ -41,17 +38,15 @@
     .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
     .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
     
-    @keyframes spin-slow {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-    
-    .modal-enter { animation: fadeIn 0.2s ease-out; }
     @keyframes fadeIn {
-      from { opacity: 0; transform: scale(0.95); }
+      from { opacity: 0; transform: scale(0.98); }
       to { opacity: 1; transform: scale(1); }
     }
+    .modal-enter { animation: fadeIn 0.2s ease-out; }
     .break-inside-avoid { break-inside: avoid; }
+    .drag-over-active { background-color: #f1f5f9 !important; border-color: #3b82f6 !important; border-style: dashed !important; border-width: 2px !important; }
+    
+    .tag-header:hover { background-color: rgba(0,0,0,0.02); border-radius: 8px; }
   </style>
 </head>
 <body class="bg-gray-50 text-slate-800 font-sans overflow-hidden">
@@ -65,20 +60,17 @@
   <script type="text/babel">
     const { useState, useEffect, useMemo, useRef } = React;
 
+    const TAG_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
+    const getRandomColor = () => TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+
     const safeDecode = (str) => {
       if (!str) return '';
-      try {
-        return decodeURIComponent(str);
-      } catch (e) {
-        console.warn("URL Çözümleme Hatası (Yoksayıldı):", str);
-        return str; 
-      }
+      try { return decodeURIComponent(str); } catch (e) { return str; }
     };
 
     const sanitizeUrl = (url) => {
       if (!url) return '#';
       const trimmed = url.trim();
-      if (trimmed.toLowerCase().startsWith('javascript:')) return '#';
       return trimmed.startsWith('http') ? trimmed : 'https://' + trimmed;
     };
 
@@ -89,119 +81,54 @@
     };
 
     const extractHandle = (url) => {
-      if (!url || typeof url !== 'string') return '@kullanici';
-      try {
-        const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)/);
-        return match ? `@${match[1]}` : '@kullanici';
-      } catch (e) {
-        return '@kullanici';
-      }
+      if (!url || typeof url !== 'string') return '@user';
+      const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)/);
+      return match ? `@${match[1]}` : '@user';
     };
 
     const getHighResUrl = (url) => {
       if (!url) return '';
       if (url.match(/\.(mp4|webm|ogg|m3u8)/i)) return url; 
-      if (url.includes('name=')) {
-        return url.replace(/name=[a-zA-Z0-9_]+/, 'name=large');
-      }
-      return url;
+      return url.includes('name=') ? url.replace(/name=[a-zA-Z0-9_]+/, 'name=large') : url;
     };
 
     const handleDownload = async (url) => {
       try {
         const response = await fetch(url);
-        if (!response.ok) throw new Error('Ağ hatası');
         const blob = await response.blob();
-        const blobUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.style.display = 'none';
-        a.href = blobUrl;
-        a.download = url.split('/').pop().split('?')[0] || 'kayitlik_medya';
-        document.body.appendChild(a);
+        a.href = URL.createObjectURL(blob);
+        a.download = 'tweetmark_media';
         a.click();
-        window.URL.revokeObjectURL(blobUrl);
-        document.body.removeChild(a);
-      } catch (err) {
-        console.error('CORS veya ağ hatası. Medya yeni sekmede açılıyor...', err);
-        window.open(url, '_blank');
-      }
+      } catch (err) { window.open(url, '_blank'); }
     };
 
-    // --- ÖZEL HLS VİDEO OYNATICI (POSTER DESTEKLİ) ---
-    const HlsVideoPlayer = ({ src, poster, className, controls, autoPlay, muted, onClick }) => {
+    const HlsVideoPlayer = ({ src, poster, className, controls, autoPlay, muted }) => {
       const videoRef = useRef(null);
-
       useEffect(() => {
         const video = videoRef.current;
         if (!video || !src) return;
-
         let hls;
-
         if (src.includes('.m3u8') && window.Hls && window.Hls.isSupported()) {
           hls = new window.Hls();
           hls.loadSource(src);
           hls.attachMedia(video);
-          hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-            if (autoPlay) {
-              video.play().catch(e => console.warn("Otomatik oynatma engellendi:", e));
-            }
-          });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = src;
-          video.addEventListener('loadedmetadata', () => {
-            if (autoPlay) {
-              video.play().catch(e => console.warn("Otomatik oynatma engellendi:", e));
-            }
-          });
-        } else {
-          video.src = src;
-        }
-
-        return () => {
-          if (hls) hls.destroy();
-        };
+          if (autoPlay) hls.on(window.Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+        } else { video.src = src; if (autoPlay) video.play().catch(() => {}); }
+        return () => hls && hls.destroy();
       }, [src, autoPlay]);
-
-      return (
-        <video 
-          ref={videoRef}
-          className={className}
-          controls={controls}
-          muted={muted}
-          poster={poster}
-          onClick={onClick}
-          playsInline
-          preload="metadata"
-        />
-      );
+      return <video ref={videoRef} className={className} controls={controls} muted={muted} poster={poster} playsInline preload="metadata" />;
     };
 
-    const TweetEmbed = ({ tweetId, theme = 'light' }) => {
-      const [isVisible, setIsVisible] = useState(false);
+    const TweetEmbed = ({ tweetId }) => {
       const containerRef = useRef(null);
-
       useEffect(() => {
-        const observer = new IntersectionObserver(([entry]) => {
-          if (entry.isIntersecting) { setIsVisible(true); observer.disconnect(); }
-        }, { rootMargin: '400px' });
-        if (containerRef.current) observer.observe(containerRef.current);
-        return () => observer.disconnect();
-      }, []);
-
-      useEffect(() => {
-        if (isVisible && window.twttr && /^\d+$/.test(tweetId)) {
+        if (window.twttr && tweetId && containerRef.current) {
           containerRef.current.innerHTML = ''; 
-          window.twttr.widgets.createTweet(tweetId, containerRef.current, { 
-            theme: theme, align: 'center', dnt: true, conversation: 'none' 
-          });
+          window.twttr.widgets.createTweet(tweetId, containerRef.current, { theme: 'light', align: 'center', dnt: true });
         }
-      }, [isVisible, tweetId, theme]);
-
-      return (
-        <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center">
-          {!isVisible && <div className="w-full h-32 bg-slate-50 animate-pulse rounded-xl"></div>}
-        </div>
-      );
+      }, [tweetId]);
+      return <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center bg-slate-50 rounded-xl" />;
     };
 
     const CustomTweetCard = ({ bookmark, onImageClick }) => {
@@ -209,56 +136,30 @@
       const name = bookmark.authorName || handle;
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
       const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
-      
-      const isActuallyVideoLink = medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
-      const isVideo = bookmark.mediaType === 'video' || isActuallyVideoLink;
+      const isVideo = bookmark.mediaType === 'video' || medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
 
       return (
         <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left overflow-hidden">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-3 overflow-hidden pr-2">
-              <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100 shrink-0" onError={(e) => { e.target.src = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'; }} />
+              <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100 shrink-0" />
               <div className="flex flex-col overflow-hidden">
-                <span className="font-bold text-slate-900 text-sm leading-tight hover:underline truncate">{name}</span>
+                <span className="font-bold text-slate-900 text-[15px] leading-tight truncate">{name}</span>
                 <span className="text-slate-500 text-xs truncate">{handle}</span>
               </div>
             </div>
             <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
           </div>
-
           <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3 break-words overflow-hidden" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : ''}}></p>
-
           {medias.length > 0 && (
             <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 bg-black/5 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
               {isVideo ? (
-                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-95 transition-opacity" onClick={(e) => { e.stopPropagation(); onImageClick(medias, 0, 'video', bookmark.posterUrl); }}>
-                  {isActuallyVideoLink ? (
-                    <HlsVideoPlayer 
-                      src={medias[0]} 
-                      poster={bookmark.posterUrl || medias[0]}
-                      className="w-full h-full object-cover opacity-70" 
-                      muted={true} 
-                      controls={false}
-                      autoPlay={false} 
-                    />
-                  ) : (
-                    <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
-                  )}
-                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center pointer-events-none z-10">
-                    <i className="fa-solid fa-play text-white text-xl ml-1"></i>
-                  </div>
+                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity" onClick={(e) => { e.stopPropagation(); onImageClick(medias, 0, 'video', bookmark.posterUrl); }}>
+                  <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted playsInline />
+                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center z-10"><i className="fa-solid fa-play text-white text-xl ml-1"></i></div>
                 </div>
               ) : (
-                medias.map((url, idx) => (
-                  <img 
-                    key={idx} 
-                    src={url} 
-                    alt="Tweet Medya" 
-                    onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }}
-                    className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 transition-opacity bg-slate-100" 
-                    onError={(e) => e.target.style.display = 'none'} 
-                  />
-                ))
+                medias.map((url, idx) => <img key={idx} src={url} alt="Media" onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }} className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 bg-slate-100" />)
               )}
             </div>
           )}
@@ -267,97 +168,65 @@
     };
 
     function App() {
+      // --- INITIAL STATE ---
       const initialData = useMemo(() => {
         const safeParse = (key) => {
-            try {
-                const data = localStorage.getItem(key);
-                if (data) {
-                    const parsed = JSON.parse(data);
-                    if (Array.isArray(parsed)) return parsed;
-                }
-            } catch(e) { console.warn(key + " okuma hatası, yoksayılıyor."); }
-            return [];
+          try { const d = localStorage.getItem(key); return d ? JSON.parse(d) : []; } catch(e) { return []; }
         };
-
-        let b = safeParse('tweetBookmarks_v1').filter(i => i && typeof i === 'object');
-        let t = safeParse('tweetTrash_v1').filter(i => i && typeof i === 'object');
-        let f = safeParse('tweetFolders_v1').filter(i => i && typeof i === 'object');
-        let tg = safeParse('tweetTags_v1').filter(i => i && typeof i === 'object');
-
-        b.forEach(item => {
-            if (!Array.isArray(item.tags)) item.tags = [];
-            if (typeof item.folder !== 'string') item.folder = 'Genel';
-            if (typeof item.description !== 'string') item.description = '';
-            if (typeof item.tweetText !== 'string') item.tweetText = '';
-        });
-
-        const now = Date.now();
-        t = t.filter(item => item.deletedAt && (now - item.deletedAt) < 30 * 24 * 60 * 60 * 1000);
-
-        const existingNames = new Set(f.map(x => x.name));
-        b.forEach(item => {
-          if (item.folder && item.folder !== 'Tümü' && !existingNames.has(item.folder)) {
-            f.push({ id: 'f_' + Math.random().toString(36).substr(2, 9), name: item.folder, color: '#94a3b8', isPinned: false });
-            existingNames.add(item.folder);
-          }
-        });
-        f = f.map(x => ({ ...x, isPinned: !!x.isPinned }));
-
-        const existingTagNames = new Set(tg.map(x => x.name));
-        b.forEach(item => {
-          (item.tags || []).forEach(tag => {
-            if (!existingTagNames.has(tag)) {
-              tg.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
-              existingTagNames.add(tag);
-            }
-          });
-        });
-        
-        return { bookmarks: b, trash: t, folders: f, tags: tg };
+        return { 
+          bookmarks: safeParse('tweetBookmarks_v1'), 
+          trash: safeParse('tweetTrash_v1'), 
+          folders: safeParse('tweetFolders_v2'), 
+          tags: safeParse('tweetTags_v1') 
+        };
       }, []);
 
-      const [viewMode, setViewMode] = useState('grid');
-      
       const [bookmarks, setBookmarks] = useState(initialData.bookmarks);
+      const [customFolders, setCustomFolders] = useState(initialData.folders);
+      const [customTags, setCustomTags] = useState(initialData.tags);
       const [trash, setTrash] = useState(initialData.trash);
-      const [activeFolder, setActiveFolder] = useState('Tümü');
+      const [activeFolder, setActiveFolder] = useState('All');
       const [searchQuery, setSearchQuery] = useState('');
-      const [gridCols, setGridCols] = useState(3);
+      const [gridCols, setGridCols] = useState(() => parseInt(localStorage.getItem('tweetGridCols')) || 3);
+      
       const [isModalOpen, setIsModalOpen] = useState(false);
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+      const [isGridMenuOpen, setIsGridMenuOpen] = useState(false);
       const [focusedTweet, setFocusedTweet] = useState(null);
-      const [previewState, setPreviewState] = useState(null); 
+      const [previewState, setPreviewState] = useState(null);
+      const [expandedFolders, setExpandedFolders] = useState([]);
+      const [dragOverFolderId, setDragOverFolderId] = useState(null);
+      const dragItemRef = useRef(null);
 
-      const [newUrl, setNewUrl] = useState('');
-      const [newFolder, setNewFolder] = useState('');
-      const [newTags, setNewTags] = useState('');
-      const [newDesc, setNewDesc] = useState('');
-      const [newTweetText, setNewTweetText] = useState('');
-      
-      const [newAuthorName, setNewAuthorName] = useState('');
-      const [newAuthorHandle, setNewAuthorHandle] = useState('');
-      const [newProfileImg, setNewProfileImg] = useState('');
-      const [newMediaUrls, setNewMediaUrls] = useState('');
-      const [newMediaType, setNewMediaType] = useState('image');
-      const [newPosterUrl, setNewPosterUrl] = useState(''); 
-
-      const [customFolders, setCustomFolders] = useState(initialData.folders);
       const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
       const [editingFolder, setEditingFolder] = useState(null);
       const [folderNameInput, setFolderNameInput] = useState('');
       const [folderColorInput, setFolderColorInput] = useState('#3b82f6');
 
-      const [customTags, setCustomTags] = useState(initialData.tags);
       const [isTagModalOpen, setIsTagModalOpen] = useState(false);
       const [editingTag, setEditingTag] = useState(null);
       const [tagNameInput, setTagNameInput] = useState('');
       const [tagColorInput, setTagColorInput] = useState('#64748b');
-      const [isTagsExpanded, setIsTagsExpanded] = useState(false); 
+      const [isTagsExpanded, setIsTagsExpanded] = useState(true);
 
       const [isEditingFocus, setIsEditingFocus] = useState(false);
       const [focusEditDesc, setFocusEditDesc] = useState('');
       const [focusEditTags, setFocusEditTags] = useState('');
       const [focusEditFolder, setFocusEditFolder] = useState('');
+
+      const [newUrl, setNewUrl] = useState('');
+      const [newFolder, setNewFolder] = useState('');
+      const [newTags, setNewTags] = useState('');
+      const [newDesc, setNewDesc] = useState('');
+
+      // --- EFFECTS ---
+      useEffect(() => {
+        localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks));
+        localStorage.setItem('tweetFolders_v2', JSON.stringify(customFolders));
+        localStorage.setItem('tweetTags_v1', JSON.stringify(customTags));
+        localStorage.setItem('tweetTrash_v1', JSON.stringify(trash));
+        localStorage.setItem('tweetGridCols', gridCols.toString());
+      }, [bookmarks, customFolders, customTags, trash, gridCols]);
 
       useEffect(() => {
         if (!window.twttr) {
@@ -368,57 +237,14 @@
         }
       }, []);
 
-      useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const extUrl = params.get('url');
-        
-        if (extUrl) {
-          setNewUrl(safeDecode(extUrl));
-          setNewTweetText(safeDecode(params.get('text')));
-          setNewAuthorName(safeDecode(params.get('authorName')));
-          setNewAuthorHandle(safeDecode(params.get('authorHandle')));
-          setNewProfileImg(safeDecode(params.get('profileImg')));
-          setNewMediaUrls(safeDecode(params.get('mediaUrls')));
-          setNewMediaType(safeDecode(params.get('mediaType')) || 'image');
-          setNewPosterUrl(safeDecode(params.get('posterUrl')));
-
-          setIsModalOpen(true);
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      }, []);
-
-      useEffect(() => {
-        const handleKeyDown = (e) => {
-          if (!previewState || !previewState.medias) return;
-          if (e.key === 'Escape') {
-            setPreviewState(null);
-          } else if (e.key === 'ArrowRight' && previewState.medias.length > 1) {
-            setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length}));
-          } else if (e.key === 'ArrowLeft' && previewState.medias.length > 1) {
-            setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length}));
-          }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-      }, [previewState]);
-
-      useEffect(() => { try { localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks)); } catch(e){} }, [bookmarks]);
-      useEffect(() => { try { localStorage.setItem('tweetFolders_v1', JSON.stringify(customFolders)); } catch(e){} }, [customFolders]);
-      useEffect(() => { try { localStorage.setItem('tweetTags_v1', JSON.stringify(customTags)); } catch(e){} }, [customTags]);
-      useEffect(() => { try { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); } catch(e){} }, [trash]); 
-
+      // --- HANDLERS ---
       const handleExportJSON = () => {
-        const payload = { app: "Kayitlik", version: "5.0", bookmarks, customFolders, customTags, trash };
-        const dataStr = JSON.stringify(payload, null, 2);
-        const blob = new Blob([dataStr], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = `kayitlik-tam-yedek-${new Date().toISOString().split('T')[0]}.json`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        const payload = { bookmarks, customFolders, customTags, trash };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `tweetmark-backup.json`;
+        a.click();
       };
 
       const handleImportJSON = (event) => {
@@ -427,73 +253,54 @@
         const reader = new FileReader();
         reader.onload = (e) => {
           try {
-            const imported = JSON.parse(e.target.result);
-            if (imported.bookmarks) setBookmarks(imported.bookmarks);
-            if (imported.customFolders) setCustomFolders(imported.customFolders);
-            if (imported.customTags) setCustomTags(imported.customTags);
-            if (imported.trash) setTrash(imported.trash);
-            alert('Arşiv ve tüm renk ayarları başarıyla yüklendi!');
-          } catch (error) {
-            alert('Dosya okunurken bir hata oluştu.');
-          }
+            const data = JSON.parse(e.target.result);
+            if (data.bookmarks) setBookmarks(data.bookmarks);
+            if (data.customFolders) setCustomFolders(data.customFolders);
+            if (data.customTags) setCustomTags(data.customTags);
+            if (data.trash) setTrash(data.trash);
+            alert("Archive loaded!");
+          } catch (err) { alert("Error loading file."); }
         };
         reader.readAsText(file);
-        event.target.value = ''; 
       };
 
       const handleAddBookmark = (e) => {
         e.preventDefault();
         const tweetId = extractTweetId(newUrl);
-        if (!tweetId) return alert("Geçerli bir tweet linki girin.");
+        if (!tweetId) return alert("Please enter a valid tweet link.");
 
         const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-        const folderName = newFolder.trim() || "Genel";
-        
-        const detectedMediaType = newMediaUrls.match(/\.(mp4|webm|ogg|m3u8)/i) ? 'video' : newMediaType;
-
-        const newBtn = {
-          id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
-          tweetId,
-          url: sanitizeUrl(newUrl),
-          folder: folderName,
-          tags: tagsArray,
-          description: newDesc.trim(),
-          tweetText: newTweetText.trim(),
-          authorName: newAuthorName.trim(),
-          authorHandle: newAuthorHandle.trim(),
-          profileImg: newProfileImg.trim(),
-          mediaUrls: newMediaUrls.trim(),
-          mediaType: detectedMediaType,
-          posterUrl: newPosterUrl.trim(),
-          date: new Date().toLocaleDateString('tr-TR')
-        };
-
-        if (folderName !== 'Tümü' && !customFolders.some(f => f.name === folderName)) {
-          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name: folderName, color: '#94a3b8', isPinned: false }]);
-        }
-
         const newTagsList = [...customTags];
         let tagsChanged = false;
         tagsArray.forEach(tag => {
-          if (!newTagsList.some(t => t.name === tag)) {
-            newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
-            tagsChanged = true;
-          }
+            if (!newTagsList.some(t => t.name === tag)) {
+                newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: getRandomColor() });
+                tagsChanged = true;
+            }
         });
         if (tagsChanged) setCustomTags(newTagsList);
 
+        const newBtn = {
+          id: Date.now().toString(),
+          tweetId,
+          url: sanitizeUrl(newUrl),
+          folder: newFolder.trim() || "General",
+          tags: tagsArray,
+          description: newDesc.trim(),
+          date: new Date().toLocaleDateString('en-US')
+        };
+
         setBookmarks([newBtn, ...bookmarks]);
         setIsModalOpen(false);
-        setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc(''); 
-        setNewTweetText(''); setNewAuthorName(''); setNewAuthorHandle(''); setNewProfileImg(''); setNewMediaUrls(''); setNewMediaType('image'); setNewPosterUrl('');
+        setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc('');
       };
 
       const handleMoveToTrash = (e, id) => {
         e.stopPropagation();
         const item = bookmarks.find(b => b.id === id);
         if (item) {
-          setTrash([...trash, { ...item, deletedAt: Date.now() }]);
-          setBookmarks(bookmarks.filter(b => b.id !== id));
+          setTrash(prev => [{ ...item, deletedAt: Date.now() }, ...prev]);
+          setBookmarks(prev => prev.filter(b => b.id !== id));
           if (focusedTweet && focusedTweet.id === id) setFocusedTweet(null);
         }
       };
@@ -502,479 +309,295 @@
         e.stopPropagation();
         const item = trash.find(t => t.id === id);
         if (item) {
-          const { deletedAt, ...rest } = item;
-          setBookmarks([rest, ...bookmarks]);
-          setTrash(trash.filter(t => t.id !== id));
+          setBookmarks(prev => [item, ...prev]);
+          setTrash(prev => prev.filter(t => t.id !== id));
         }
       };
 
       const handlePermanentDelete = (e, id) => {
         e.stopPropagation();
-        if(window.confirm("Bu tweeti kalıcı olarak silmek istediğinize emin misiniz? Bu işlem geri alınamaz.")) {
-          setTrash(trash.filter(t => t.id !== id));
-        }
-      };
-
-      const emptyTrash = (e) => {
-        if (e) e.stopPropagation();
-        if(window.confirm("Çöp kutusundaki tüm tweetleri kalıcı olarak silmek istediğinize emin misiniz?")) {
-          setTrash([]);
+        if(window.confirm("Are you sure you want to permanently delete this?")) {
+          setTrash(prev => prev.filter(t => t.id !== id));
         }
       };
 
       const handleSaveFolder = (e) => {
         e.preventDefault();
-        const fName = folderNameInput.trim();
-        if(!fName) return;
-
+        const name = folderNameInput.trim();
+        if(!name) return;
         if (editingFolder) {
-          const oldName = editingFolder.name;
-          setCustomFolders(customFolders.map(f => f.id === editingFolder.id ? { ...f, name: fName, color: folderColorInput } : f));
-          if (oldName !== fName) {
-            setBookmarks(bookmarks.map(b => b.folder === oldName ? { ...b, folder: fName } : b));
-            if (activeFolder === oldName) setActiveFolder(fName);
-          }
+          setCustomFolders(customFolders.map(f => f.id === editingFolder.id ? { ...f, name, color: folderColorInput } : f));
         } else {
-          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name: fName, color: folderColorInput, isPinned: false }]);
+          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name, color: folderColorInput, parentId: null, isPinned: false }]);
         }
         setIsFolderModalOpen(false);
         setEditingFolder(null);
       };
 
-      const handleDeleteFolder = (id, name) => {
-        if(window.confirm(`"${name}" klasörünü silmek istediğinize emin misiniz? İçindeki tweetler silinmeyecek, "Genel" klasörüne taşınacak.`)) {
-          setCustomFolders(customFolders.filter(f => f.id !== id));
-          setBookmarks(bookmarks.map(b => b.folder === name ? { ...b, folder: 'Genel' } : b));
-          if (activeFolder === name) setActiveFolder('Tümü');
-          setIsFolderModalOpen(false);
-        }
-      };
-
-      const togglePinFolder = (id) => {
-        setCustomFolders(customFolders.map(f => f.id === id ? { ...f, isPinned: !f.isPinned } : f));
-      };
-
       const handleSaveTag = (e) => {
         e.preventDefault();
-        const tName = tagNameInput.trim().toLowerCase();
-        if(!tName) return;
-
+        const name = tagNameInput.trim().toLowerCase();
+        if(!name) return;
         if (editingTag) {
-          const oldName = editingTag.name;
-          setCustomTags(customTags.map(t => t.id === editingTag.id ? { ...t, name: tName, color: tagColorInput } : t));
-          if (oldName !== tName) {
-            setBookmarks(bookmarks.map(b => ({
-              ...b,
-              tags: b.tags.map(tag => tag === oldName ? tName : tag)
-            })));
-            if (searchQuery === oldName) setSearchQuery(tName);
-          }
+          setCustomTags(customTags.map(t => t.id === editingTag.id ? { ...t, name, color: tagColorInput } : t));
+          setBookmarks(bookmarks.map(b => ({
+            ...b,
+            tags: b.tags.map(tag => tag === editingTag.name ? name : tag)
+          })));
         } else {
-          setCustomTags([...customTags, { id: 't_' + Date.now(), name: tName, color: tagColorInput }]);
+          setCustomTags([...customTags, { id: 't_' + Date.now(), name: name, color: tagColorInput }]);
         }
         setIsTagModalOpen(false);
         setEditingTag(null);
       };
 
-      const handleDeleteTag = (id, name) => {
-        if(window.confirm(`"#${name}" etiketini silmek istediğinize emin misiniz?`)) {
-          setCustomTags(customTags.filter(t => t.id !== id));
-          setBookmarks(bookmarks.map(b => ({ ...b, tags: (b.tags || []).filter(tag => tag !== name) })));
-          setIsTagModalOpen(false);
-        }
-      };
-
       const startFocusEdit = () => {
         setFocusEditDesc(focusedTweet.description || '');
         setFocusEditTags((focusedTweet.tags || []).join(', '));
-        setFocusEditFolder(focusedTweet.folder);
+        setFocusEditFolder(focusedTweet.folder || 'General');
         setIsEditingFocus(true);
       };
 
       const saveFocusEdit = () => {
-        const updatedFolder = focusEditFolder.trim() || 'Genel';
         const tagsArray = focusEditTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-        const updatedTweet = {
-          ...focusedTweet,
-          description: focusEditDesc.trim(),
-          folder: updatedFolder,
-          tags: tagsArray
-        };
-        
-        if (updatedFolder !== 'Tümü' && !customFolders.some(f => f.name === updatedFolder)) {
-          setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name: updatedFolder, color: '#94a3b8', isPinned: false }]);
-        }
-
         const newTagsList = [...customTags];
-        let tagsChanged = false;
         tagsArray.forEach(tag => {
-          if (!newTagsList.some(t => t.name === tag)) {
-            newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
-            tagsChanged = true;
-          }
+            if (!newTagsList.some(t => t.name === tag)) {
+                newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: getRandomColor() });
+            }
         });
-        if (tagsChanged) setCustomTags(newTagsList);
+        setCustomTags(newTagsList);
 
-        setBookmarks(bookmarks.map(b => b.id === focusedTweet.id ? updatedTweet : b));
+        const updatedTweet = { ...focusedTweet, description: focusEditDesc.trim(), folder: focusEditFolder.trim(), tags: tagsArray };
+        setBookmarks(prev => prev.map(b => b.id === focusedTweet.id ? updatedTweet : b));
         setFocusedTweet(updatedTweet);
         setIsEditingFocus(false);
       };
-      
-      const filteredBookmarks = useMemo(() => {
-        const sourceList = activeFolder === 'Çöp Kutusu' ? trash : bookmarks;
-        return sourceList.filter(b => {
-          const mF = activeFolder === 'Tümü' || activeFolder === 'Çöp Kutusu' || b.folder === activeFolder;
-          const sL = searchQuery.toLowerCase();
-          return mF && (!sL || 
-            (b.tags || []).some(t => (t||'').includes(sL)) || 
-            (b.description || '').toLowerCase().includes(sL) || 
-            (b.folder || '').toLowerCase().includes(sL) ||
-            (b.tweetText && String(b.tweetText).toLowerCase().includes(sL)) 
-          );
+
+      // --- RENDER HELPERS ---
+      const getFolderAndDescendants = (folderId, list) => {
+        let names = [list.find(f => f.id === folderId)?.name];
+        list.filter(f => f.parentId === folderId).forEach(c => {
+          names = names.concat(getFolderAndDescendants(c.id, list));
         });
-      }, [bookmarks, trash, activeFolder, searchQuery]);
+        return names.filter(Boolean);
+      };
+
+      const topLevelFolders = useMemo(() => customFolders.filter(f => !f.parentId), [customFolders]);
+      const getCumulativeCount = (fId) => bookmarks.filter(b => getFolderAndDescendants(fId, customFolders).includes(b.folder)).length;
+      const unsortedCount = useMemo(() => bookmarks.filter(b => !b.folder || b.folder === 'General' || b.folder === 'Genel').length, [bookmarks]);
+
+      const filteredBookmarks = useMemo(() => {
+        const source = activeFolder === 'Trash' ? trash : bookmarks;
+        return source.filter(b => {
+          let mF = false;
+          if (activeFolder === 'All' || activeFolder === 'Trash') mF = true;
+          else if (activeFolder === 'Unsorted') mF = (!b.folder || b.folder === 'General' || b.folder === 'Genel');
+          else if (activeFolder.startsWith('tag:')) {
+            const tagName = activeFolder.split(':')[1];
+            mF = (b.tags || []).includes(tagName);
+          } else {
+            const f = customFolders.find(f => f.name === activeFolder);
+            mF = f ? getFolderAndDescendants(f.id, customFolders).includes(b.folder) : (b.folder === activeFolder);
+          }
+          const s = searchQuery.toLowerCase();
+          return mF && (!s || (b.tags||[]).some(t => t.includes(s)) || (b.description||'').toLowerCase().includes(s) || (b.tweetText||'').toLowerCase().includes(s) || (b.authorName||'').toLowerCase().includes(s));
+        });
+      }, [bookmarks, trash, activeFolder, searchQuery, customFolders]);
+
+      const FolderItem = ({ folder, depth = 0 }) => {
+        const children = customFolders.filter(f => f.parentId === folder.id);
+        const isExpanded = expandedFolders.includes(folder.id);
+        const isActive = activeFolder === folder.name;
+        return (
+          <div className="w-full">
+            <div draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'folder', id: folder.id }; }} onDragOver={(e) => { e.preventDefault(); setDragOverFolderId(folder.id); }} onDragLeave={() => setDragOverFolderId(null)} onDrop={(e) => {
+                e.preventDefault(); setDragOverFolderId(null);
+                const data = dragItemRef.current;
+                if (!data || (data.type === 'folder' && data.id === folder.id)) return;
+                if (data.type === 'folder') setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: folder.id } : f));
+                else if (data.type === 'tweet') setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
+                dragItemRef.current = null;
+              }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0' }}>
+              <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-6 h-6 flex items-center justify-center ${children.length === 0 && 'invisible'}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
+              <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[14px] font-medium truncate py-1.5 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
+              <div className="flex items-center gap-1.5 pr-2"><span className="text-[11px] font-bold opacity-60">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
+            </div>
+            {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
+          </div>
+        );
+      };
 
       const gridConfig = {
+        1: { cols: 'columns-1', padding: 'max-w-2xl' },
+        2: { cols: 'columns-1 md:columns-2', padding: 'max-w-4xl' },
         3: { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl' },
         4: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4', padding: 'max-w-[90rem]' },
         5: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5', padding: 'max-w-[120rem]' }
       }[gridCols];
 
-      const pinnedFolders = customFolders.filter(f => f.isPinned);
-      const unpinnedFolders = customFolders.filter(f => !f.isPinned);
-
       return (
         <div className="flex h-screen w-full bg-slate-50 text-slate-800 font-sans overflow-hidden">
-          
-          {isSidebarOpen && (
-            <div className="fixed inset-0 bg-black/20 z-20 sm:hidden" onClick={() => setIsSidebarOpen(false)} />
-          )}
-
-          <aside className={`
-            fixed inset-y-0 left-0 z-30 w-64 bg-white border-r border-slate-200 flex flex-col transition-transform duration-300
-            ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full sm:translate-x-0'} sm:static sm:flex-shrink-0 shadow-sm
-          `}>
-            <div className="p-6 flex items-center gap-3 border-b border-slate-100">
-              <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md">
-                <i className="fa-solid fa-bookmark text-white text-sm"></i>
-              </div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-900 cursor-pointer" onClick={() => { setViewMode('grid'); setActiveFolder('Tümü'); setSearchQuery(''); }}>Kayıtlık</h1>
+          <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm hidden sm:flex">
+            <div className="p-6 flex items-center gap-3 border-b border-slate-50">
+              <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md"><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
+              <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
             </div>
-
-            <div className="flex-1 overflow-y-auto py-6 px-4 space-y-8 custom-scrollbar flex flex-col justify-between">
-              
+            <div className="flex-1 overflow-y-auto py-6 px-4 space-y-6 custom-scrollbar">
+              <ul className="space-y-0.5">
+                <li><button onClick={() => setActiveFolder('All')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[14px] font-medium transition-all ${activeFolder === 'All' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}><i className="fa-solid fa-layer-group"></i> All <span className="ml-auto text-xs font-bold opacity-60">{bookmarks.length}</span></button></li>
+                <li><button onClick={() => setActiveFolder('Unsorted')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[14px] font-medium transition-all ${activeFolder === 'Unsorted' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}><i className="fa-solid fa-inbox"></i> Unsorted <span className="ml-auto text-xs font-bold opacity-60">{unsortedCount}</span></button></li>
+              </ul>
               <div>
-                <ul className="space-y-1 mb-8">
-                  <li>
-                    <button
-                      onClick={() => { setActiveFolder('Tümü'); setViewMode('grid'); setIsSidebarOpen(false); }}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm transition-all duration-200 ${
-                        activeFolder === 'Tümü' && viewMode === 'grid' ? 'bg-black text-white font-medium shadow-sm' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-900'
-                      }`}
-                    >
-                      <i className={`fa-solid fa-layer-group ${activeFolder === 'Tümü' && viewMode === 'grid' ? 'text-white' : 'text-slate-400'}`}></i>
-                      <span className="truncate font-semibold">Tümü</span>
-                      <span className={`ml-auto text-[10px] ${activeFolder === 'Tümü' && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
-                        {bookmarks.length}
-                      </span>
-                    </button>
-                  </li>
-                </ul>
-
-                <div className="mb-8">
-                  <div className="flex justify-between items-center mb-3 px-2">
-                    <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Klasörler</h2>
-                    <button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="text-slate-400 hover:text-black transition-colors p-1" title="Yeni Klasör Ekle">
-                      <i className="fa-solid fa-plus text-xs"></i>
-                    </button>
-                  </div>
-
-                  {pinnedFolders.length > 0 && (
-                    <div className="mb-4">
-                      <h3 className="text-[10px] font-bold text-slate-300 uppercase tracking-widest px-3 mb-2 flex items-center gap-1">
-                        <i className="fa-solid fa-thumbtack"></i> Favoriler
-                      </h3>
-                      <ul className="space-y-1">
-                        {pinnedFolders.map(folder => (
-                          <li key={folder.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden" style={{ backgroundColor: activeFolder === folder.name && viewMode === 'grid' ? '#000' : '' }}>
-                            <button onClick={() => { setActiveFolder(folder.name); setViewMode('grid'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === folder.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}>
-                              <i className="fa-solid fa-folder" style={{ color: activeFolder === folder.name && viewMode === 'grid' ? '#fff' : folder.color }}></i>
-                              <span className="truncate">{folder.name}</span>
-                            </button>
-                            <div className="w-14 h-full flex items-center justify-end pr-2 gap-1">
-                              <span className={`text-[10px] group-hover:hidden ${activeFolder === folder.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
-                                {bookmarks.filter(b => b.folder === folder.name).length}
-                              </span>
-                              <button onClick={(e) => { e.stopPropagation(); togglePinFolder(folder.id); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-orange-500 transition-opacity" title="Sabitlemeyi Kaldır">
-                                <i className="fa-solid fa-thumbtack text-[10px]"></i>
-                              </button>
-                              <button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color || '#3b82f6'); setIsFolderModalOpen(true); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-blue-500 transition-opacity" title="Düzenle">
-                                <i className="fa-solid fa-pen text-[10px]"></i>
-                              </button>
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  <ul className="space-y-1">
-                    {unpinnedFolders.map(folder => (
-                      <li key={folder.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden" style={{ backgroundColor: activeFolder === folder.name && viewMode === 'grid' ? '#000' : '' }}>
-                        <button onClick={() => { setActiveFolder(folder.name); setViewMode('grid'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === folder.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}>
-                          <i className="fa-solid fa-folder" style={{ color: activeFolder === folder.name && viewMode === 'grid' ? '#fff' : folder.color }}></i>
-                          <span className="truncate">{folder.name}</span>
-                        </button>
-                        <div className="w-14 h-full flex items-center justify-end pr-2 gap-1">
-                          <span className={`text-[10px] group-hover:hidden ${activeFolder === folder.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
-                            {bookmarks.filter(b => b.folder === folder.name).length}
-                          </span>
-                          <button onClick={(e) => { e.stopPropagation(); togglePinFolder(folder.id); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-orange-500 transition-opacity" title="Sabitle">
-                            <i className="fa-solid fa-thumbtack text-[10px] opacity-50"></i>
-                          </button>
-                          <button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color || '#3b82f6'); setIsFolderModalOpen(true); }} className="hidden group-hover:flex p-1 text-slate-400 hover:text-blue-500 transition-opacity" title="Düzenle">
-                            <i className="fa-solid fa-pen text-[10px]"></i>
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <div>
-                  <div className="flex justify-between items-center mb-3 px-2 cursor-pointer select-none group" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
-                    <h2 className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2 group-hover:text-slate-600 transition-colors">
-                      <i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[10px] w-3`}></i> Etiketler
-                    </h2>
-                    <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="text-slate-400 hover:text-black transition-colors p-1" title="Yeni Etiket Ekle">
-                      <i className="fa-solid fa-plus text-xs"></i>
-                    </button>
-                  </div>
-                  {isTagsExpanded && (
-                    <div className="flex flex-col space-y-1">
-                      {customTags.map(tag => (
-                        <div key={tag.id} className="group flex items-center rounded-xl transition-all duration-200 hover:bg-slate-100 overflow-hidden" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#000' : '' }}>
-                          <button onClick={() => { setSearchQuery(searchQuery === tag.name ? '' : tag.name); setViewMode('grid'); }} className={`flex-1 flex items-center gap-3 px-3 py-2 text-sm ${searchQuery === tag.name && viewMode === 'grid' ? 'text-white font-medium' : 'text-slate-500 group-hover:text-slate-900'}`}>
-                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: searchQuery === tag.name && viewMode === 'grid' ? '#fff' : tag.color }}></span>
-                            <span className="truncate">#{tag.name}</span>
-                          </button>
-                          <div className="w-10 h-full flex items-center justify-end pr-3">
-                             <span className={`text-[10px] group-hover:hidden ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
-                               {bookmarks.filter(b => (b.tags||[]).includes(tag.name)).length}
-                             </span>
-                             <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color || '#64748b'); setIsTagModalOpen(true); }} className={`hidden group-hover:flex p-1 ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300 hover:text-white' : 'text-slate-400 hover:text-blue-500'} transition-opacity`} title="Etiketi Düzenle">
-                              <i className="fa-solid fa-pen text-[10px]"></i>
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Folders</h2><button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
+                <div className="space-y-0.5">{topLevelFolders.map(f => <FolderItem key={f.id} folder={f} />)}</div>
               </div>
-
-              <div className="mt-8 pt-4 border-t border-slate-100">
-                <div className={`flex items-center justify-between rounded-xl overflow-hidden transition-all duration-200 ${activeFolder === 'Çöp Kutusu' ? 'bg-red-50' : 'hover:bg-red-50'}`}>
-                  <button onClick={() => { setActiveFolder('Çöp Kutusu'); setViewMode('grid'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-3 px-3 py-2.5 text-sm ${activeFolder === 'Çöp Kutusu' ? 'text-red-600 font-medium' : 'text-slate-500 hover:text-red-500'}`}>
-                    <i className="fa-solid fa-trash-can"></i>
-                    <span className="truncate">Çöp Kutusu</span>
-                    {trash.length > 0 && <span className="text-[10px] font-bold bg-red-100 text-red-500 px-2 py-0.5 rounded-full">{trash.length}</span>}
-                  </button>
-                  {trash.length > 0 && <button onClick={emptyTrash} className="px-3 py-2.5 text-slate-400 hover:text-red-600 hover:bg-red-100 transition-colors" title="Çöp Kutusunu Boşalt"><i className="fa-solid fa-broom text-xs"></i></button>}
+              <div>
+                <div className="flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
+                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
+                  <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
                 </div>
+                {isTagsExpanded && (
+                  <div className="space-y-0.5 mt-1">
+                    {customTags.length > 0 ? customTags.map(tag => {
+                      const isActive = activeFolder === `tag:${tag.name}`;
+                      return (
+                        <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white shadow-sm' : 'hover:bg-slate-100'}`}>
+                          <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-3 px-3 py-1.5 text-[13px] font-medium truncate text-left"><span className="w-2 h-2 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: tag.color }}></span> #{tag.name}</button>
+                          <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block pr-3 text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button>
+                        </div>
+                      );
+                    }) : <div className="px-3 py-2 text-[11px] text-slate-400 italic">No tags yet</div>}
+                  </div>
+                )}
               </div>
             </div>
+            <div className="p-4 border-t border-slate-100"><button onClick={() => setActiveFolder('Trash')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[14px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash <span className="ml-auto text-xs font-bold opacity-60">{trash.length}</span></button></div>
           </aside>
 
-          <main className="flex-1 flex flex-col h-screen min-w-0 relative bg-slate-50/50">
-            <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-10 shrink-0">
-              <div className="flex items-center gap-6">
-                <button className="sm:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button>
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900 capitalize hidden sm:block">{activeFolder}</h2>
-                  <p className="text-[11px] text-slate-400 font-medium uppercase tracking-wider hidden sm:block">{filteredBookmarks.length} Kayıt</p>
+          <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
+            <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-40 shrink-0">
+              <div className="flex items-center gap-4"><button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button><h2 className="text-lg font-bold text-slate-900 capitalize">{activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2></div>
+              <div className="flex items-center gap-4">
+                <div className="relative hidden md:block"><i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i><input type="text" placeholder="Search notes, tags, or profiles..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all" /></div>
+                <div className="flex bg-slate-100 rounded-full p-1"><button onClick={handleExportJSON} className="p-2 text-slate-500 hover:text-black transition-colors" title="Download Backup"><i className="fa-solid fa-download text-xs"></i></button><label className="p-2 text-slate-500 hover:text-black cursor-pointer" title="Upload Backup"><i className="fa-solid fa-upload text-xs"></i><input type="file" accept=".json" className="hidden" onChange={handleImportJSON} /></label></div>
+                <div className="relative" tabIndex="0" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsGridMenuOpen(false); }}>
+                  <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i> {gridCols} Column</button>
+                  {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
                 </div>
-              </div>
-
-              <div className="flex items-center gap-4 sm:gap-6">
-                {viewMode === 'grid' && activeFolder !== 'Çöp Kutusu' && (
-                  <div className="relative hidden md:block">
-                    <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i>
-                    <input type="text" placeholder="İçerik, not, etiket ara..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all" />
-                    {searchQuery && <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><i className="fa-solid fa-times text-xs"></i></button>}
-                  </div>
-                )}
-                <div className="flex bg-slate-100 rounded-full p-1 hidden sm:flex">
-                  <button onClick={handleExportJSON} title="Tüm Arşivi İndir" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all"><i className="fa-solid fa-download text-xs"></i></button>
-                  <label title="Arşivi Yükle" className="w-8 h-8 flex items-center justify-center text-slate-500 hover:text-black hover:bg-white rounded-full transition-all cursor-pointer"><i className="fa-solid fa-upload text-xs"></i><input type="file" accept=".json" className="hidden" onChange={handleImportJSON} /></label>
-                </div>
-                {viewMode === 'grid' && (
-                  <div className="hidden md:flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                    {[3, 4, 5].map(n => <button key={n} onClick={() => setGridCols(n)} className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] font-bold transition-all ${gridCols === n ? 'bg-white shadow-sm text-black' : 'text-slate-400 hover:text-slate-600'}`}>{n}X</button>)}
-                  </div>
-                )}
-                <button onClick={() => setIsModalOpen(true)} className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-plus mr-2"></i> YENİ</button>
+                <button onClick={() => setIsModalOpen(true)} className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-plus mr-2"></i> NEW</button>
               </div>
             </header>
-
             <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
-              <div className={`mx-auto ${gridConfig.padding}`}>
-                <div className={`${gridConfig.cols} gap-6`}>
-                  {filteredBookmarks.map(b => (
-                    <div key={b.id} onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full max-w-[400px] ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer'}`}>
-                      <div className="p-3.5 flex justify-between items-center bg-white border-b border-slate-100 z-10">
-                        <span className="px-2.5 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-lg flex items-center"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder}</span>
-                        {activeFolder === 'Çöp Kutusu' ? (
-                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                             <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle"><i className="fa-solid fa-rotate-left text-[10px]"></i></button>
-                             <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil"><i className="fa-solid fa-trash text-[10px]"></i></button>
-                          </div>
+              <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-6`}>
+                {filteredBookmarks.map(b => (
+                  <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if(activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full max-w-[420px] transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400`}>
+                    <div className="p-3.5 flex justify-between items-center bg-white border-b border-slate-100 z-10">
+                      <span className="px-2.5 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-lg flex items-center"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder || 'Unsorted'}</span>
+                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {activeFolder === 'Trash' ? (
+                          <><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><i className="fa-solid fa-rotate-left"></i></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><i className="fa-solid fa-trash"></i></button></>
                         ) : (
-                          <button onClick={(e) => handleMoveToTrash(e, b.id)} className="w-7 h-7 bg-white border border-slate-200 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100" title="Çöpe At"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                          <button onClick={(e) => handleMoveToTrash(e, b.id)} className="text-slate-400 hover:text-red-600 transition-colors p-0.5"><i className="fa-solid fa-trash-can text-[13px]"></i></button>
                         )}
                       </div>
-                      <div className="p-4 bg-slate-50 flex-1 border-b border-slate-100">
-                        {b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || b.mediaType, poster })} /> : <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 pointer-events-none"><TweetEmbed tweetId={b.tweetId} /></div>}
-                      </div>
-                      <div className="p-4 bg-white flex flex-col gap-3">
-                        {b.description && <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">"{b.description}"</p></div>}
-                        <div className="flex items-end justify-between mt-1">
-                          <div className="flex flex-wrap gap-1.5 flex-1 pr-2">{(b.tags || []).map(tag => { const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' }; return <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate max-w-[150px]"><span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span> <span className="truncate">{tag}</span></span>; })}</div>
-                          <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-8 h-8 shrink-0 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black hover:bg-slate-50 rounded-xl transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[11px]"></i></a>
-                        </div>
+                    </div>
+                    <div className="p-4 bg-slate-50 flex-1 border-b border-slate-100">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type, poster })} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
+                    <div className="p-4 bg-white space-y-3">
+                      {b.description && <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">"{b.description}"</p></div>}
+                      <div className="flex items-end justify-between mt-1">
+                        <div className="flex flex-wrap gap-1.5 flex-1 pr-2">{(b.tags || []).map(tag => {
+                          const tO = customTags.find(t => t.name === tag);
+                          return <span key={tag} className="flex items-center gap-1.5 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tO?.color || '#64748b' }}></span> #{tag}</span>;
+                        })}</div>
+                        <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-8 h-8 shrink-0 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-xl transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[11px]"></i></a>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </div>
-              {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">İçerik Bulunamadı</p></div>}
+                  </div>
+                ))}
+              </div></div>
+              {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
             </div>
           </main>
 
-          {/* TAM EKRAN MODAL */}
-          {previewState && previewState.medias && (
-            <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}>
-              {previewState.mediaType === 'video' ? (
-                String(previewState.medias[previewState.currentIndex]).match(/\.(mp4|webm|ogg|m3u8)/i) ? (
-                  <HlsVideoPlayer 
-                    src={previewState.medias[previewState.currentIndex]} 
-                    poster={previewState.poster}
-                    controls={true}
-                    autoPlay={true}
-                    muted={false}
-                    className="max-w-full max-h-[90vh] rounded-lg shadow-2xl transition-all outline-none" 
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                ) : (
-                  <div className="relative" onClick={(e) => e.stopPropagation()}>
-                    <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" />
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg">
-                       <div className="bg-white/90 p-6 rounded-2xl text-center shadow-xl max-w-xs scale-90 sm:scale-100">
-                          <i className="fa-solid fa-video-slash text-slate-400 text-3xl mb-3"></i>
-                          <p className="text-slate-800 font-bold text-sm mb-4">Video Linki Alınamadı</p>
-                          <p className="text-slate-500 text-xs mb-6 leading-relaxed text-center">API sınırı veya hesap kilitli olduğu için video oynatılamıyor.</p>
-                          <a href={focusedTweet?.url} target="_blank" className="inline-block bg-black text-white px-6 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all">X'te Görüntüle</a>
-                       </div>
-                    </div>
-                  </div>
-                )
-              ) : (
-                <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} alt="Tam Ekran Önizleme" className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl transition-all" onClick={(e) => e.stopPropagation()} />
-              )}
-              
-              {previewState.medias.length > 1 && (
-                <>
-                  <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length})); }} className="absolute left-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"><i className="fa-solid fa-chevron-left text-xl"></i></button>
-                  <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length})); }} className="absolute right-6 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm cursor-pointer"><i className="fa-solid fa-chevron-right text-xl"></i></button>
-                  <div className="absolute bottom-6 left-1/2 -translate-x-1/2 bg-black/50 text-white text-xs font-bold px-4 py-2 rounded-full backdrop-blur-md pointer-events-none">{previewState.currentIndex + 1} / {previewState.medias.length}</div>
-                </>
-              )}
-
-              <button onClick={(e) => { e.stopPropagation(); const targetUrl = previewState.mediaType === 'video' ? previewState.medias[previewState.currentIndex] : getHighResUrl(previewState.medias[previewState.currentIndex]); handleDownload(targetUrl); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm" title="Cihaza İndir"><i className="fa-solid fa-download text-lg"></i></button>
-              <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors backdrop-blur-sm"><i className="fa-solid fa-xmark text-xl"></i></button>
-            </div>
-          )}
-
+          {/* EDIT (FOCUS) MODAL */}
           {focusedTweet && (
             <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
               <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-                <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[300px]">
-                   <div className="w-full max-w-lg mt-8">
-                      {focusedTweet.tweetText ? <div className="scale-110 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />}
-                   </div>
-                </div>
+                <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[300px]"><div className="w-full max-w-lg mt-8">{focusedTweet.tweetText ? <div className="scale-110 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />}</div></div>
                 <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
-                  <div>
-                    <div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder}</span>
-                      <div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400" title="Düzenle"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div>
-                    </div>
+                  <div><div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span><div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div></div>
                     {isEditingFocus ? (
                       <div className="space-y-4 mb-8">
-                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Senin Notun</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
-                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Klasör</label><input type="text" value={focusEditFolder} onChange={e => setFocusEditFolder(e.target.value)} list="focus-folder-options" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /><datalist id="focus-folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist></div>
-                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Etiketler (Virgülle)</label><input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /></div>
-                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">KAYDET</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">İPTAL</button></div>
+                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
+                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Folder</label><input type="text" value={focusEditFolder} onChange={e => setFocusEditFolder(e.target.value)} list="focus-folder-options" className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /><datalist id="focus-folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist></div>
+                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label><input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /></div>
+                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">CANCEL</button></div>
                       </div>
                     ) : (
-                      <>
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Senin Notun</h3>
-                        <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed italic break-words">{focusedTweet.description || "Bu tweet için bir not eklenmemiş."}</p></div>
-                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Etiketler</h3>
-                        <div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => { const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' }; return <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: tagObj.color }}></span> <span className="truncate">{tag}</span></span>; }) : <span className="text-slate-300 text-sm italic">Etiket yok</span>}</div>
-                      </>
+                      <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed italic break-words">{focusedTweet.description || "No note added for this tweet."}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
                     )}
                   </div>
-                  <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto"><span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v5.1</span><a href={focusedTweet.url} target="_blank" className="flex items-center gap-2 bg-black text-white px-5 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">X'TE AÇ <i className="fa-solid fa-external-link"></i></a></div>
+                  <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto"><span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">TWEETMARK v6.6</span><a href={focusedTweet.url} target="_blank" className="flex items-center gap-2 bg-black text-white px-5 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">OPEN ON X <i className="fa-solid fa-external-link"></i></a></div>
                 </div>
               </div>
             </div>
           )}
 
+          {/* TAG MODAL */}
+          {isTagModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                <form onSubmit={handleSaveTag} className="p-6 space-y-4">
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Pick a Color</label><div className="flex items-center gap-3"><input type="color" value={tagColorInput} onChange={e => setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /><span className="text-sm font-medium text-slate-600 uppercase font-mono">{tagColorInput}</span></div></div>
+                  <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingTag && <button type="button" onClick={() => { if(window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ADD MODAL */}
           {isModalOpen && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Yer İmi Ekle</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+              <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter">
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
                 <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
-                  <input type="url" required placeholder="Tweet URL" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" />
-                  <div className="grid grid-cols-2 gap-4">
-                    <input type="text" placeholder="Klasör" value={newFolder} onChange={e => setNewFolder(e.target.value)} list="folder-options" className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" /><datalist id="folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist>
-                    <input type="text" placeholder="Etiketler" value={newTags} onChange={e => setNewTags(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" />
-                  </div>
-                  <div className="h-24 overflow-y-auto custom-scrollbar border border-dashed border-slate-200 rounded-xl p-2 bg-slate-50">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Gelişmiş Veriler (Eklenti Otomatik Doldurur)</p>
-                    <div className="space-y-2 px-1">
-                      <input type="text" placeholder="Yazar Adı" value={newAuthorName} onChange={e => setNewAuthorName(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Kullanıcı Adı" value={newAuthorHandle} onChange={e => setNewAuthorHandle(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Görsel / Video Linkleri" value={newMediaUrls} onChange={e => setNewMediaUrls(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <input type="text" placeholder="Kapak Fotoğrafı Linki" value={newPosterUrl} onChange={e => setNewPosterUrl(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
-                      <select value={newMediaType} onChange={e => setNewMediaType(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none"><option value="image">Görsel (Image)</option><option value="video">Video</option></select>
-                      <textarea placeholder="Tweet Metni" rows="2" value={newTweetText} onChange={e => setNewTweetText(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none resize-none" />
-                    </div>
-                  </div>
-                  <textarea placeholder="Senin Notların..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all" />
-                  <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg hover:bg-slate-800 active:scale-95 transition-all">Koleksiyona Ekle</button>
+                  <input type="url" required placeholder="Tweet URL (https://x.com/...)" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" />
+                  <div className="grid grid-cols-2 gap-4"><input type="text" placeholder="Folder" value={newFolder} onChange={e => setNewFolder(e.target.value)} list="folder-options" className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /><datalist id="folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist><input type="text" placeholder="Tags (comma separated)" value={newTags} onChange={e => setNewTags(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                  <textarea placeholder="Your Note..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none resize-none transition-all" />
+                  <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg">Add to Collection</button>
                 </form>
               </div>
             </div>
           )}
 
-          {(isFolderModalOpen || isTagModalOpen) && (
+          {/* PREVIEW MODAL */}
+          {previewState && (
+            <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}>
+              {previewState.mediaType === 'video' ? <HlsVideoPlayer src={previewState.medias[previewState.currentIndex]} poster={previewState.poster} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none" onClick={(e) => e.stopPropagation()} /> : <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />}
+              <button onClick={(e) => { e.stopPropagation(); handleDownload(previewState.medias[previewState.currentIndex]); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-download"></i></button>
+              <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+          )}
+
+          {/* FOLDER MODAL */}
+          {isFolderModalOpen && (
             <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-              <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200">
-                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{isFolderModalOpen ? (editingFolder ? 'Klasörü Düzenle' : 'Yeni Klasör') : (editingTag ? 'Etiketi Düzenle' : 'Yeni Etiket')}</h3><button onClick={() => { setIsFolderModalOpen(false); setIsTagModalOpen(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
-                <form onSubmit={isFolderModalOpen ? handleSaveFolder : handleSaveTag} className="p-6 space-y-4">
-                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">{isFolderModalOpen ? 'Klasör Adı' : 'Etiket Adı'}</label><input type="text" required placeholder={isFolderModalOpen ? 'Örn: Tasarım' : 'Örn: ui-ux'} value={isFolderModalOpen ? folderNameInput : tagNameInput} onChange={e => isFolderModalOpen ? setFolderNameInput(e.target.value) : setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all" /></div>
-                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Renk Seçimi</label><div className="flex items-center gap-3"><input type="color" value={isFolderModalOpen ? folderColorInput : tagColorInput} onChange={e => isFolderModalOpen ? setFolderColorInput(e.target.value) : setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer" /><span className="text-sm font-medium text-slate-600 uppercase">{isFolderModalOpen ? folderColorInput : tagColorInput}</span></div></div>
-                  <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg hover:bg-slate-800 active:scale-95 transition-all">KAYDET</button>{(isFolderModalOpen && editingFolder) && (<button type="button" onClick={() => handleDeleteFolder(editingFolder.id, editingFolder.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">SİL</button>)}{(isTagModalOpen && editingTag) && (<button type="button" onClick={() => handleDeleteTag(editingTag.id, editingTag.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">SİL</button>)}</div>
+              <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                  <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /><span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
+                  <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingFolder && <button type="button" onClick={() => handleDeleteFolder(editingFolder.id, editingFolder.name)} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
                 </form>
               </div>
             </div>
           )}
-
         </div>
       );
     }
-
     const root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
