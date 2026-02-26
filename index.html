@@ -92,15 +92,16 @@
       }
     };
 
+    // Yüksek çözünürlük alırken videoların bozulmasını engelleyen koruma
     const getHighResUrl = (url) => {
       if (!url) return '';
+      if (url.match(/\.(mp4|webm|ogg|m3u8)/i)) return url; // Videolara dokunma
       if (url.includes('name=')) {
         return url.replace(/name=[a-zA-Z0-9_]+/, 'name=large');
       }
       return url;
     };
 
-    // İSTEK 1: Güvenli İndirme Fonksiyonu
     const handleDownload = async (url) => {
       try {
         const response = await fetch(url);
@@ -149,12 +150,14 @@
       );
     };
 
-    // İSTEK 2: CustomTweetCard onClick metoduna mediaType eklendi
     const CustomTweetCard = ({ bookmark, onImageClick }) => {
       const handle = bookmark.authorHandle || extractHandle(bookmark.url);
       const name = bookmark.authorName || handle;
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
       const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
+      
+      // HATA ÇÖZÜMÜ: Eğer URL .mp4 içeriyorsa mediaType belirtilmese bile Video olarak algıla
+      const isVideo = bookmark.mediaType === 'video' || medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
 
       return (
         <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left overflow-hidden">
@@ -172,16 +175,12 @@
           <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3 break-words overflow-hidden" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : ''}}></p>
 
           {medias.length > 0 && (
-            <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 ${medias.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
-              {bookmark.mediaType === 'video' ? (
-                // Kart üzerinde hala kapak fotoğrafı gibi durur, tıklayınca videoyu modala paslar
-                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity" onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick([medias[0]], 0, 'video'); }}>
-                  {medias[0].includes('.mp4') ? (
-                    <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted />
-                  ) : (
-                    <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
-                  )}
-                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center">
+            <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
+              {isVideo ? (
+                // Otomatik Video Algılayıcı ve Oynatıcı
+                <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-95 transition-opacity" onClick={(e) => { e.stopPropagation(); if(onImageClick) onImageClick([medias[0]], 0, 'video'); }}>
+                  <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted playsInline preload="metadata" />
+                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center pointer-events-none">
                     <i className="fa-solid fa-play text-white text-xl ml-1"></i>
                   </div>
                 </div>
@@ -263,8 +262,6 @@
       const [isModalOpen, setIsModalOpen] = useState(false);
       const [isSidebarOpen, setIsSidebarOpen] = useState(false);
       const [focusedTweet, setFocusedTweet] = useState(null);
-      
-      // Preview state'i artık mediaType bilgisini de barındırıyor
       const [previewState, setPreviewState] = useState(null); 
 
       const [newUrl, setNewUrl] = useState('');
@@ -347,7 +344,7 @@
       useEffect(() => { try { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); } catch(e){} }, [trash]); 
 
       const handleExportJSON = () => {
-        const payload = { app: "Kayitlik", version: "4.8", bookmarks, customFolders, customTags, trash };
+        const payload = { app: "Kayitlik", version: "4.9", bookmarks, customFolders, customTags, trash };
         const dataStr = JSON.stringify(payload, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -387,6 +384,9 @@
 
         const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
         const folderName = newFolder.trim() || "Genel";
+        
+        // Form gönderilirken otomatik video algılama
+        const detectedMediaType = newMediaUrls.match(/\.(mp4|webm|ogg|m3u8)/i) ? 'video' : newMediaType;
 
         const newBtn = {
           id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
@@ -400,7 +400,7 @@
           authorHandle: newAuthorHandle.trim(),
           profileImg: newProfileImg.trim(),
           mediaUrls: newMediaUrls.trim(),
-          mediaType: newMediaType,
+          mediaType: detectedMediaType,
           date: new Date().toLocaleDateString('tr-TR')
         };
 
@@ -928,7 +928,7 @@
               onClick={() => setPreviewState(null)}
             >
               {/* Oynatılabilir Video veya Yüksek Çözünürlüklü Resim */}
-              {previewState.mediaType === 'video' || String(previewState.medias[previewState.currentIndex]).includes('.mp4') ? (
+              {previewState.mediaType === 'video' || String(previewState.medias[previewState.currentIndex]).match(/\.(mp4|webm|ogg|m3u8)/i) ? (
                 <video 
                   src={previewState.medias[previewState.currentIndex]} 
                   controls autoPlay 
@@ -1077,7 +1077,7 @@
                   </div>
 
                   <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.8</span>
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.9</span>
                     <a 
                       href={focusedTweet.url} 
                       target="_blank"
