@@ -40,7 +40,6 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
-    .twitter-tweet { margin-top: 0 !important; margin-bottom: 0 !important; width: 100% !important; }
     
     .modal-enter { animation: fadeIn 0.2s ease-out; }
     @keyframes fadeIn {
@@ -72,6 +71,16 @@
       return match && /^\d+$/.test(match[1]) ? match[1] : null;
     };
 
+    const extractHandle = (url) => {
+      try {
+        const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)/);
+        return match ? `@${match[1]}` : '@kullanici';
+      } catch (e) {
+        return '@kullanici';
+      }
+    };
+
+    // --- ESKİ KAYITLAR İÇİN HİBRİT EMBED (Geriye Dönük Uyumluluk) ---
     const TweetEmbed = ({ tweetId, theme = 'light' }) => {
       const [isVisible, setIsVisible] = useState(false);
       const containerRef = useRef(null);
@@ -100,6 +109,51 @@
       );
     };
 
+    // --- YENİ ŞIK TWEET KARTI BİLEŞENİ ---
+    const CustomTweetCard = ({ bookmark }) => {
+      const handle = bookmark.authorHandle || extractHandle(bookmark.url);
+      const name = bookmark.authorName || handle;
+      const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+      const medias = bookmark.mediaUrls ? bookmark.mediaUrls.split(',').filter(Boolean) : [];
+
+      return (
+        <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow text-left">
+          {/* Üst Kısım: Yazar Bilgileri */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-3">
+              <img src={avatar} alt={name} className="w-10 h-10 rounded-full object-cover border border-slate-100" onError={(e) => { e.target.src = 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'; }} />
+              <div className="flex flex-col">
+                <span className="font-bold text-slate-900 text-sm leading-tight hover:underline">{name}</span>
+                <span className="text-slate-500 text-xs">{handle}</span>
+              </div>
+            </div>
+            <i className="fa-brands fa-x-twitter text-slate-300 text-lg"></i>
+          </div>
+
+          {/* İçerik: Metin */}
+          <p className="text-slate-800 text-[15px] leading-snug whitespace-pre-wrap mb-3" dangerouslySetInnerHTML={{__html: bookmark.tweetText ? bookmark.tweetText.replace(/\n/g, '<br/>') : ''}}></p>
+
+          {/* İçerik: Medya (Görsel/Video) */}
+          {medias.length > 0 && (
+            <div className={`mt-3 rounded-2xl overflow-hidden border border-slate-100 ${medias.length > 1 ? 'grid grid-cols-2 gap-1' : ''}`}>
+              {bookmark.mediaType === 'video' ? (
+                <div className="relative w-full bg-black flex items-center justify-center aspect-video">
+                  <img src={medias[0]} className="w-full h-full object-cover opacity-70" alt="Video Kapak" />
+                  <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center">
+                    <i className="fa-solid fa-play text-white text-xl ml-1"></i>
+                  </div>
+                </div>
+              ) : (
+                medias.map((url, idx) => (
+                  <img key={idx} src={url} alt="Tweet Medya" className="w-full h-auto object-cover max-h-80" onError={(e) => e.target.style.display = 'none'} />
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      );
+    };
+
     function App() {
       const [viewMode, setViewMode] = useState('grid');
       
@@ -117,7 +171,14 @@
       const [newFolder, setNewFolder] = useState('');
       const [newTags, setNewTags] = useState('');
       const [newDesc, setNewDesc] = useState('');
-      const [newTweetText, setNewTweetText] = useState(''); // Yeni: Chrome Extension'dan gelecek metin
+      const [newTweetText, setNewTweetText] = useState('');
+      
+      // Yeni: Eklentiden Gelecek Detaylı Medya/Yazar Bilgileri
+      const [newAuthorName, setNewAuthorName] = useState('');
+      const [newAuthorHandle, setNewAuthorHandle] = useState('');
+      const [newProfileImg, setNewProfileImg] = useState('');
+      const [newMediaUrls, setNewMediaUrls] = useState('');
+      const [newMediaType, setNewMediaType] = useState('image'); // image veya video
 
       // Klasör ve Etiket State'leri
       const [customFolders, setCustomFolders] = useState([]);
@@ -131,8 +192,6 @@
       const [editingTag, setEditingTag] = useState(null);
       const [tagNameInput, setTagNameInput] = useState('');
       const [tagColorInput, setTagColorInput] = useState('#64748b');
-      
-      // İstek: Etiketler akordiyonu varsayılan olarak kapalı
       const [isTagsExpanded, setIsTagsExpanded] = useState(false); 
 
       // Focus Edit State'leri
@@ -141,17 +200,27 @@
       const [focusEditTags, setFocusEditTags] = useState('');
       const [focusEditFolder, setFocusEditFolder] = useState('');
 
-      // --- CHROME EXTENSION ENTEGRASYONU (URL Parametre Yakalayıcı) ---
+      // --- CHROME EXTENSION ENTEGRASYONU ---
       useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const extUrl = params.get('url');
         const extText = params.get('text');
+        const extAuthorName = params.get('authorName');
+        const extAuthorHandle = params.get('authorHandle');
+        const extProfileImg = params.get('profileImg');
+        const extMediaUrls = params.get('mediaUrls');
+        const extMediaType = params.get('mediaType');
         
         if (extUrl) {
           setNewUrl(extUrl);
           if (extText) setNewTweetText(decodeURIComponent(extText));
+          if (extAuthorName) setNewAuthorName(decodeURIComponent(extAuthorName));
+          if (extAuthorHandle) setNewAuthorHandle(decodeURIComponent(extAuthorHandle));
+          if (extProfileImg) setNewProfileImg(decodeURIComponent(extProfileImg));
+          if (extMediaUrls) setNewMediaUrls(decodeURIComponent(extMediaUrls));
+          if (extMediaType) setNewMediaType(extMediaType);
+
           setIsModalOpen(true);
-          // Parametreleri temizle ki sayfa yenilendiğinde tekrar modal açılmasın
           window.history.replaceState({}, document.title, window.location.pathname);
         }
       }, []);
@@ -208,6 +277,7 @@
         });
         setCustomTags(parsedTags);
 
+        // Hibrit yapı için (eski tweetleri render edebilmek adına) Twitter scripti hala lazım.
         if (!window.twttr) {
           const script = document.createElement("script");
           script.src = "https://platform.twitter.com/widgets.js";
@@ -222,7 +292,7 @@
       useEffect(() => { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); }, [trash]); 
 
       const handleExportJSON = () => {
-        const payload = { app: "Kayitlik", version: "4.0", bookmarks, customFolders, customTags, trash };
+        const payload = { app: "Kayitlik", version: "4.2", bookmarks, customFolders, customTags, trash };
         const dataStr = JSON.stringify(payload, null, 2);
         const blob = new Blob([dataStr], { type: "application/json" });
         const url = URL.createObjectURL(blob);
@@ -270,7 +340,12 @@
           folder: folderName,
           tags: tagsArray,
           description: newDesc.trim(),
-          tweetText: newTweetText.trim(), // Chrome eklentisi verisi eklendi
+          tweetText: newTweetText.trim(),
+          authorName: newAuthorName.trim(),
+          authorHandle: newAuthorHandle.trim(),
+          profileImg: newProfileImg.trim(),
+          mediaUrls: newMediaUrls.trim(),
+          mediaType: newMediaType,
           date: new Date().toLocaleDateString('tr-TR')
         };
 
@@ -290,7 +365,8 @@
 
         setBookmarks([newBtn, ...bookmarks]);
         setIsModalOpen(false);
-        setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc(''); setNewTweetText('');
+        setNewUrl(''); setNewFolder(''); setNewTags(''); setNewDesc(''); 
+        setNewTweetText(''); setNewAuthorName(''); setNewAuthorHandle(''); setNewProfileImg(''); setNewMediaUrls(''); setNewMediaType('image');
       };
 
       // --- ÇÖP KUTUSU İŞLEMLERİ ---
@@ -434,7 +510,6 @@
           const mF = activeFolder === 'Tümü' || activeFolder === 'Çöp Kutusu' || b.folder === activeFolder;
           const sL = searchQuery.toLowerCase();
           
-          // İstek: Arama artık tweet içeriğinde de yapılıyor (b.tweetText)
           return mF && (!sL || 
             b.tags.some(t => t.includes(sL)) || 
             b.description.toLowerCase().includes(sL) || 
@@ -602,7 +677,7 @@
                 </div>
               </div>
 
-              {/* ÇÖP KUTUSU (Boşalt Butonu Eklendi) */}
+              {/* ÇÖP KUTUSU */}
               <div className="mt-8 pt-4 border-t border-slate-100">
                 <div className={`flex items-center justify-between rounded-xl overflow-hidden transition-all duration-200 ${activeFolder === 'Çöp Kutusu' ? 'bg-red-50' : 'hover:bg-red-50'}`}>
                   <button
@@ -618,7 +693,6 @@
                     )}
                   </button>
                   
-                  {/* İstek: Çöp Kutusunu Boşalt Butonu */}
                   {trash.length > 0 && (
                     <button 
                       onClick={emptyTrash} 
@@ -634,7 +708,7 @@
             </div>
           </aside>
 
-          <main className="flex-1 flex flex-col h-screen min-w-0 relative">
+          <main className="flex-1 flex flex-col h-screen min-w-0 relative bg-slate-50/50">
             <header className="h-20 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-8 z-10 shrink-0">
               <div className="flex items-center gap-6">
                 <button className="sm:hidden p-2 -ml-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}>
@@ -707,28 +781,28 @@
                   <div 
                     key={b.id} 
                     onClick={() => { if(activeFolder !== 'Çöp Kutusu') setFocusedTweet(b); }}
-                    className={`group flex flex-col bg-white rounded-2xl border border-slate-100 shadow-sm transition-all duration-300 overflow-hidden relative ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer hover:shadow-md'}`}
+                    className={`group flex flex-col bg-transparent transition-all duration-300 relative ${activeFolder === 'Çöp Kutusu' ? 'opacity-70 hover:opacity-100' : 'cursor-pointer hover:-translate-y-1'}`}
                   >
-                    
-                    <div className="p-3 bg-slate-50/50 flex justify-between items-center">
-                      <span className="px-2 py-0.5 bg-white border border-slate-100 text-[9px] font-bold uppercase tracking-wider text-slate-400 rounded flex items-center">
+                    {/* Kart Üst Aksiyon ve Klasör Barı */}
+                    <div className="flex justify-between items-center mb-2 px-1">
+                      <span className="px-2 py-0.5 bg-white border border-slate-200 text-[9px] font-bold uppercase tracking-wider text-slate-400 rounded flex items-center shadow-sm">
                         <i className="fa-solid fa-folder mr-1.5 text-[8px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i>
                         {b.folder}
                       </span>
                       
                       {activeFolder === 'Çöp Kutusu' ? (
                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                           <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-6 h-6 bg-white border border-slate-100 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle">
+                           <button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="w-6 h-6 bg-white border border-slate-200 shadow-sm rounded-full text-green-500 hover:text-green-600 flex items-center justify-center transition-all" title="Geri Yükle">
                             <i className="fa-solid fa-rotate-left text-[9px]"></i>
                            </button>
-                           <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-6 h-6 bg-white border border-slate-100 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil">
+                           <button onClick={(e) => handlePermanentDelete(e, b.id)} className="w-6 h-6 bg-white border border-slate-200 shadow-sm rounded-full text-red-500 hover:text-red-700 flex items-center justify-center transition-all" title="Kalıcı Sil">
                             <i className="fa-solid fa-trash text-[9px]"></i>
                            </button>
                         </div>
                       ) : (
                         <button 
                           onClick={(e) => handleMoveToTrash(e, b.id)}
-                          className="w-6 h-6 bg-white border border-slate-100 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
+                          className="w-6 h-6 bg-white border border-slate-200 shadow-sm rounded-full text-red-400 hover:text-red-600 flex items-center justify-center transition-all opacity-0 group-hover:opacity-100"
                           title="Çöpe At"
                         >
                           <i className="fa-solid fa-trash-can text-[9px]"></i>
@@ -736,25 +810,30 @@
                       )}
                     </div>
 
-                    <div className="p-4 bg-white pointer-events-none">
-                      <TweetEmbed tweetId={b.tweetId} />
-                    </div>
+                    {/* Akıllı Tweet Gösterimi (Metin varsa Özel Kart, yoksa Embed) */}
+                    {b.tweetText ? (
+                      <CustomTweetCard bookmark={b} />
+                    ) : (
+                      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 pointer-events-none">
+                        <TweetEmbed tweetId={b.tweetId} />
+                      </div>
+                    )}
 
-                    <div className="p-5 pt-0 space-y-3">
+                    <div className="mt-3 px-1 space-y-3">
                       {b.description && (
-                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-3">
+                        <div className="bg-white border border-slate-100 shadow-sm rounded-xl p-3">
                           <p className="text-xs font-medium text-slate-800 leading-relaxed italic line-clamp-3">
                             "{b.description}"
                           </p>
                         </div>
                       )}
                       
-                      <div className="flex items-center justify-between pt-2">
+                      <div className="flex items-center justify-between">
                         <div className="flex flex-wrap gap-1.5">
                           {b.tags.map(tag => {
                             const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
                             return (
-                              <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold">
+                              <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-100 shadow-sm text-slate-500 rounded-lg text-[10px] font-semibold">
                                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: tagObj.color }}></span>
                                 {tag}
                               </span>
@@ -765,14 +844,14 @@
                           href={b.url} 
                           target="_blank" 
                           onClick={(e) => e.stopPropagation()}
-                          className="w-7 h-7 shrink-0 flex items-center justify-center bg-slate-50 text-slate-400 hover:text-black hover:bg-slate-100 rounded-lg transition-all"
+                          className="w-7 h-7 shrink-0 flex items-center justify-center bg-white border border-slate-100 shadow-sm text-slate-400 hover:text-black hover:bg-slate-50 rounded-lg transition-all"
                         >
                           <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
                         </a>
                       </div>
                       
                       {activeFolder === 'Çöp Kutusu' && (
-                        <div className="pt-2 text-[10px] text-red-400 text-center font-medium">
+                        <div className="text-[10px] text-red-400 text-center font-medium">
                           Silinme: {new Date(b.deletedAt).toLocaleDateString('tr-TR')}
                         </div>
                       )}
@@ -796,12 +875,16 @@
               onClick={() => setFocusedTweet(null)}
             >
               <div 
-                className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row max-h-[90vh]"
+                className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row max-h-[90vh]"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-center justify-center min-h-[300px]">
-                   <div className="w-full max-w-md">
-                      <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />
+                <div className="flex-1 bg-slate-50 p-6 sm:p-10 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[300px]">
+                   <div className="w-full max-w-lg mt-8">
+                      {focusedTweet.tweetText ? (
+                        <div className="scale-110 transform origin-top"><CustomTweetCard bookmark={focusedTweet} /></div>
+                      ) : (
+                        <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />
+                      )}
                    </div>
                 </div>
 
@@ -875,7 +958,7 @@
                   </div>
 
                   <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.1</span>
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.2</span>
                     <a 
                       href={focusedTweet.url} 
                       target="_blank"
@@ -920,13 +1003,25 @@
                       className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none transition-all"
                     />
                   </div>
+                  
+                  {/* Chrome Eklentisinden Gelen Detaylı Veriler (Kullanıcı manuel de girebilir) */}
+                  <div className="h-24 overflow-y-auto custom-scrollbar border border-dashed border-slate-200 rounded-xl p-2 bg-slate-50">
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Gelişmiş Veriler (Eklenti Otomatik Doldurur)</p>
+                    <div className="space-y-2 px-1">
+                      <input type="text" placeholder="Yazar Adı (Örn: Elon Musk)" value={newAuthorName} onChange={e => setNewAuthorName(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Kullanıcı Adı (Örn: @elonmusk)" value={newAuthorHandle} onChange={e => setNewAuthorHandle(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Profil Resmi Linki" value={newProfileImg} onChange={e => setNewProfileImg(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <input type="text" placeholder="Medya Linkleri (Virgülle ayırın)" value={newMediaUrls} onChange={e => setNewMediaUrls(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none" />
+                      <select value={newMediaType} onChange={e => setNewMediaType(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none">
+                        <option value="image">Görsel (Image)</option>
+                        <option value="video">Video</option>
+                      </select>
+                      <textarea placeholder="Tweet Metni" rows="2" value={newTweetText} onChange={e => setNewTweetText(e.target.value)} className="w-full px-2 py-1 bg-white border border-slate-100 rounded text-xs outline-none resize-none" />
+                    </div>
+                  </div>
+
                   <textarea 
-                    placeholder="Tweet Metni (Chrome Eklentisinden Gelebilir...)" rows="2"
-                    value={newTweetText} onChange={e => setNewTweetText(e.target.value)}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all"
-                  />
-                  <textarea 
-                    placeholder="Notların..." rows="3"
+                    placeholder="Senin Notların..." rows="3"
                     value={newDesc} onChange={e => setNewDesc(e.target.value)}
                     className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white focus:ring-2 focus:ring-black outline-none resize-none transition-all"
                   />
