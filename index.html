@@ -78,11 +78,13 @@
     };
 
     const extractTweetId = (url) => {
+      if (!url || typeof url !== 'string') return null;
       const match = url.match(/\/status\/(\d+)/);
       return match && /^\d+$/.test(match[1]) ? match[1] : null;
     };
 
     const extractHandle = (url) => {
+      if (!url || typeof url !== 'string') return '@kullanici';
       try {
         const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)/);
         return match ? `@${match[1]}` : '@kullanici';
@@ -123,7 +125,7 @@
       const handle = bookmark.authorHandle || extractHandle(bookmark.url);
       const name = bookmark.authorName || handle;
       const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
-      const medias = bookmark.mediaUrls ? bookmark.mediaUrls.split(',').filter(Boolean) : [];
+      const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
 
       return (
         <div className="w-full bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow text-left">
@@ -163,21 +165,33 @@
     function App() {
       // --- Veri Silinmesini Önleyen Güvenli Başlangıç (Initialization) ---
       const initialData = useMemo(() => {
-        let b = [], t = [], f = [], tg = [];
-        
-        try { const sb = localStorage.getItem('tweetBookmarks_v1'); if (sb) b = JSON.parse(sb); } catch(e){}
-        
-        try { 
-          const st = localStorage.getItem('tweetTrash_v1'); 
-          if (st) {
-            const parsed = JSON.parse(st);
-            const now = Date.now();
-            t = parsed.filter(item => (now - item.deletedAt) < 30 * 24 * 60 * 60 * 1000);
-          }
-        } catch(e){}
-        
-        try { const sf = localStorage.getItem('tweetFolders_v1'); if (sf) f = JSON.parse(sf); } catch(e){}
-        try { const stg = localStorage.getItem('tweetTags_v1'); if (stg) tg = JSON.parse(stg); } catch(e){}
+        const safeParse = (key) => {
+            try {
+                const data = localStorage.getItem(key);
+                if (data) {
+                    const parsed = JSON.parse(data);
+                    if (Array.isArray(parsed)) return parsed;
+                }
+            } catch(e) { console.warn(key + " okuma hatası, yoksayılıyor."); }
+            return [];
+        };
+
+        let b = safeParse('tweetBookmarks_v1').filter(i => i && typeof i === 'object');
+        let t = safeParse('tweetTrash_v1').filter(i => i && typeof i === 'object');
+        let f = safeParse('tweetFolders_v1').filter(i => i && typeof i === 'object');
+        let tg = safeParse('tweetTags_v1').filter(i => i && typeof i === 'object');
+
+        // Veri Bütünlüğü Koruması (Bozuk objeleri otomatik düzeltir)
+        b.forEach(item => {
+            if (!Array.isArray(item.tags)) item.tags = [];
+            if (typeof item.folder !== 'string') item.folder = 'Genel';
+            if (typeof item.description !== 'string') item.description = '';
+            if (typeof item.tweetText !== 'string') item.tweetText = '';
+        });
+
+        // Çöp Kutusu kontrolü
+        const now = Date.now();
+        t = t.filter(item => item.deletedAt && (now - item.deletedAt) < 30 * 24 * 60 * 60 * 1000);
 
         // Otomatik Migration
         const existingNames = new Set(f.map(x => x.name));
@@ -191,7 +205,7 @@
 
         const existingTagNames = new Set(tg.map(x => x.name));
         b.forEach(item => {
-          item.tags.forEach(tag => {
+          (item.tags || []).forEach(tag => {
             if (!existingTagNames.has(tag)) {
               tg.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: '#64748b' });
               existingTagNames.add(tag);
@@ -273,11 +287,11 @@
         }
       }, []);
 
-      // Verileri Güvenli Kaydetme İşlemleri
-      useEffect(() => { localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks)); }, [bookmarks]);
-      useEffect(() => { localStorage.setItem('tweetFolders_v1', JSON.stringify(customFolders)); }, [customFolders]);
-      useEffect(() => { localStorage.setItem('tweetTags_v1', JSON.stringify(customTags)); }, [customTags]);
-      useEffect(() => { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); }, [trash]); 
+      // Verileri Güvenli Kaydetme İşlemleri (Try-Catch blokları ile donatıldı)
+      useEffect(() => { try { localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks)); } catch(e){} }, [bookmarks]);
+      useEffect(() => { try { localStorage.setItem('tweetFolders_v1', JSON.stringify(customFolders)); } catch(e){} }, [customFolders]);
+      useEffect(() => { try { localStorage.setItem('tweetTags_v1', JSON.stringify(customTags)); } catch(e){} }, [customTags]);
+      useEffect(() => { try { localStorage.setItem('tweetTrash_v1', JSON.stringify(trash)); } catch(e){} }, [trash]); 
 
       const handleExportJSON = () => {
         const payload = { app: "Kayitlik", version: "4.3", bookmarks, customFolders, customTags, trash };
@@ -450,14 +464,14 @@
       const handleDeleteTag = (id, name) => {
         if(window.confirm(`"#${name}" etiketini silmek istediğinize emin misiniz?`)) {
           setCustomTags(customTags.filter(t => t.id !== id));
-          setBookmarks(bookmarks.map(b => ({ ...b, tags: b.tags.filter(tag => tag !== name) })));
+          setBookmarks(bookmarks.map(b => ({ ...b, tags: (b.tags || []).filter(tag => tag !== name) })));
           setIsTagModalOpen(false);
         }
       };
 
       const startFocusEdit = () => {
         setFocusEditDesc(focusedTweet.description || '');
-        setFocusEditTags(focusedTweet.tags.join(', '));
+        setFocusEditTags((focusedTweet.tags || []).join(', '));
         setFocusEditFolder(focusedTweet.folder);
         setIsEditingFocus(true);
       };
@@ -499,10 +513,10 @@
           const sL = searchQuery.toLowerCase();
           
           return mF && (!sL || 
-            b.tags.some(t => t.includes(sL)) || 
-            b.description.toLowerCase().includes(sL) || 
-            b.folder.toLowerCase().includes(sL) ||
-            (b.tweetText && b.tweetText.toLowerCase().includes(sL)) 
+            (b.tags || []).some(t => (t||'').includes(sL)) || 
+            (b.description || '').toLowerCase().includes(sL) || 
+            (b.folder || '').toLowerCase().includes(sL) ||
+            (b.tweetText && String(b.tweetText).toLowerCase().includes(sL)) 
           );
         });
       }, [bookmarks, trash, activeFolder, searchQuery]);
@@ -648,7 +662,7 @@
                           </button>
                           <div className="w-10 h-full flex items-center justify-end pr-3">
                              <span className={`text-[10px] group-hover:hidden ${searchQuery === tag.name && viewMode === 'grid' ? 'text-slate-300' : 'text-slate-400'}`}>
-                               {bookmarks.filter(b => b.tags.includes(tag.name)).length}
+                               {bookmarks.filter(b => (b.tags||[]).includes(tag.name)).length}
                              </span>
                              <button 
                               onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color || '#64748b'); setIsTagModalOpen(true); }}
@@ -816,7 +830,7 @@
                       
                       <div className="flex items-center justify-between">
                         <div className="flex flex-wrap gap-1.5">
-                          {b.tags.map(tag => {
+                          {(b.tags || []).map(tag => {
                             const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
                             return (
                               <span key={tag} className="flex items-center gap-1.5 px-2 py-1 bg-white border border-slate-100 shadow-sm text-slate-500 rounded-lg text-[10px] font-semibold">
@@ -929,7 +943,7 @@
 
                         <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Etiketler</h3>
                         <div className="flex flex-wrap gap-2 mb-8">
-                          {focusedTweet.tags.length > 0 ? focusedTweet.tags.map(tag => {
+                          {(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => {
                             const tagObj = customTags.find(t => t.name === tag) || { color: '#64748b' };
                             return (
                               <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold">
@@ -944,7 +958,7 @@
                   </div>
 
                   <div className="pt-6 border-t border-slate-50 flex items-center justify-between mt-auto">
-                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.3</span>
+                    <span className="text-[11px] font-bold text-slate-300 tracking-widest uppercase">KAYITLIK v4.4</span>
                     <a 
                       href={focusedTweet.url} 
                       target="_blank"
