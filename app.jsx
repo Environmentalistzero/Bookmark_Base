@@ -131,6 +131,142 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
     );
 });
 
+const CustomDropdown = ({ value, onChange, options, isMulti }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const wrapperRef = useRef(null);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (wrapperRef.current && !wrapperRef.current.contains(e.target)) {
+                setIsOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    let tags = [];
+    let currentInput = value || '';
+    if (isMulti) {
+        const parts = (value || '').split(',');
+        if (parts.length > 1) {
+            tags = parts.slice(0, -1).map(t => t.trim()).filter(Boolean);
+            currentInput = parts[parts.length - 1].trimStart();
+        } else {
+            tags = [];
+            currentInput = value || '';
+        }
+    }
+
+    const handleInputChange = (e) => {
+        if (isMulti) {
+            const newText = e.target.value;
+            const prefix = tags.length > 0 ? tags.join(', ') + ', ' : '';
+            onChange(prefix + newText);
+        } else {
+            onChange(e.target.value);
+        }
+        setIsOpen(true);
+    };
+
+    const handleRemoveTag = (e, tagToRemove) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const newTags = tags.filter(t => t !== tagToRemove);
+        const prefix = newTags.length > 0 ? newTags.join(', ') + ', ' : '';
+        onChange(prefix + currentInput);
+    };
+
+    const handleOptionSelect = (e, optValue) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (isMulti) {
+            const optTarget = optValue.toLowerCase();
+            if (tags.includes(optTarget)) {
+                const newTags = tags.filter(t => t !== optTarget);
+                const prefix = newTags.length > 0 ? newTags.join(', ') + ', ' : '';
+                onChange(prefix + currentInput);
+            } else {
+                const newTags = [...tags, optTarget];
+                onChange(newTags.join(', ') + ', ');
+            }
+        } else {
+            onChange(optValue);
+            setIsOpen(false);
+        }
+    };
+
+    const isOptionSelected = (optValue) => {
+        if (!value) return false;
+        if (!isMulti) return value.toLowerCase().trim() === optValue.toLowerCase().trim();
+        return tags.includes(optValue.toLowerCase());
+    };
+
+    const searchVal = isMulti
+        ? currentInput.trim().toLowerCase()
+        : (value || '').trim().toLowerCase();
+
+    // If it's a single select and the exact value is already selected, don't filter out the other options
+    const exactMatch = !isMulti ? options.some(opt => opt.name.toLowerCase() === searchVal) : false;
+    const filteredOptions = exactMatch ? options : options.filter(opt => opt.name.toLowerCase().includes(searchVal));
+
+    const allOptions = options.map(opt => ({ ...opt }));
+
+    return (
+        <div className={`tm-input-wrapper ${isOpen ? 'open' : ''}`} ref={wrapperRef}>
+            <div
+                className={`w-full p-1.5 bg-slate-50 border border-slate-100 rounded-xl text-sm focus-within:ring-1 focus-within:ring-black transition-all flex items-center min-h-[46px] ${isMulti ? 'flex-wrap gap-1.5' : ''}`}
+                onClick={() => setIsOpen(true)}
+            >
+                {isMulti && tags.map((tag, idx) => {
+                    const tagObj = options.find(o => o.name === tag);
+                    const bgColor = tagObj ? tagObj.color : '#cbd5e1';
+                    return (
+                        <span key={`${tag}-${idx}`} className="flex items-center gap-1.5 px-2.5 py-1 bg-white border border-slate-200 shadow-sm rounded-lg text-[13px] font-bold text-slate-700">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: bgColor }}></span>
+                            {tag}
+                            <button onClick={(e) => handleRemoveTag(e, tag)} className="ml-0.5 text-slate-400 hover:text-red-500 font-bold focus:outline-none">
+                                <i className="fa-solid fa-times text-[11px]"></i>
+                            </button>
+                        </span>
+                    );
+                })}
+                <input
+                    type="text"
+                    value={isMulti ? currentInput : value}
+                    onChange={handleInputChange}
+                    onFocus={() => setIsOpen(true)}
+                    placeholder={isMulti ? (tags.length === 0 ? "Etiket ara veya virgülle ayır..." : "") : "Klasör ara veya seç..."}
+                    className="flex-1 min-w-[120px] bg-transparent outline-none py-1 px-2"
+                />
+            </div>
+            <div className="tm-dropdown-arrow mr-2">
+                <i className="fa-solid fa-chevron-down text-xs"></i>
+            </div>
+            <div className={`tm-dropdown-menu custom-scrollbar ${isOpen ? 'show' : ''}`}>
+                {(isOpen ? filteredOptions : allOptions).length > 0 ? (isOpen ? filteredOptions : allOptions).map(opt => {
+                    const selected = isOptionSelected(opt.name);
+                    return (
+                        <div
+                            key={opt.id || opt.name}
+                            className={`tm-dropdown-item ${selected ? 'selected' : ''}`}
+                            onClick={(e) => handleOptionSelect(e, opt.name)}
+                        >
+                            <span className="flex items-center gap-2">
+                                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: opt.color || '#cbd5e1' }}></span>
+                                {isMulti ? `#${opt.name}` : opt.name}
+                            </span>
+                            <div className="tm-dropdown-checkbox"></div>
+                        </div>
+                    );
+                }) : (
+                    <div className="tm-dropdown-item" style={{ color: '#94a3b8', justifyContent: 'center' }}>Sonuç bulunamadı</div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 /* Dexie Configuration */
 const db = new window.Dexie('TweetmarkDB');
 db.version(1).stores({
@@ -233,6 +369,28 @@ function App() {
         };
         loadDb();
     }, []);
+
+    useEffect(() => {
+        const handleExternalMessage = (request, sender, sendResponse) => {
+            if (request.type === 'GET_APP_DATA') {
+                sendResponse({
+                    folders: customFolders,
+                    tags: customTags
+                });
+            }
+            return true;
+        };
+
+        if (window.chrome && chrome.runtime && chrome.runtime.onMessageExternal) {
+            chrome.runtime.onMessageExternal.addListener(handleExternalMessage);
+        }
+
+        return () => {
+            if (window.chrome && chrome.runtime && chrome.runtime.onMessageExternal) {
+                chrome.runtime.onMessageExternal.removeListener(handleExternalMessage);
+            }
+        };
+    }, [customFolders, customTags]);
 
     // --- EXTENSION SYNC EFFECT ---
     useEffect(() => {
@@ -495,7 +653,8 @@ function App() {
 
     const startFocusEdit = () => {
         setFocusEditDesc(focusedTweet.description || '');
-        setFocusEditTags((focusedTweet.tags || []).join(', '));
+        const existingTags = focusedTweet.tags || [];
+        setFocusEditTags(existingTags.length > 0 ? existingTags.join(', ') + ', ' : '');
         setFocusEditFolder(focusedTweet.folder || 'General');
         setIsEditingFocus(true);
     };
@@ -658,8 +817,8 @@ function App() {
                             <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-4`}>
                                 <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
 
-                                <div className="mt-4 space-y-3 pt-3 border-t border-slate-50">
-                                    {b.description && <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">{b.description}</p></div>}
+                                <div className="mt-4 space-y-3">
+                                    {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
 
                                     <div className="flex items-center justify-between gap-2">
                                         <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
@@ -699,20 +858,26 @@ function App() {
                                         <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
                                         <div>
                                             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Folder</label>
-                                            <select
+                                            <CustomDropdown
                                                 value={focusEditFolder}
-                                                onChange={e => setFocusEditFolder(e.target.value)}
-                                                className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black appearance-none cursor-pointer"
-                                            >
-                                                <option value="General">General</option>
-                                                {customFolders.map(f => <option key={f.id} value={f.name}>{f.name}</option>)}
-                                            </select>
+                                                onChange={setFocusEditFolder}
+                                                options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]}
+                                                isMulti={false}
+                                            />
                                         </div>
-                                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label><input type="text" value={focusEditTags} onChange={e => setFocusEditTags(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none focus:ring-1 focus:ring-black" /></div>
-                                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-black text-white py-3 rounded-xl text-xs font-bold hover:bg-slate-800 transition-all shadow-md">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all">CANCEL</button></div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label>
+                                            <CustomDropdown
+                                                value={focusEditTags}
+                                                onChange={setFocusEditTags}
+                                                options={customTags}
+                                                isMulti={true}
+                                            />
+                                        </div>
+                                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-green-600 text-white py-3 rounded-xl text-xs font-bold hover:bg-green-700 transition-all shadow-md shadow-green-600/20 active:scale-95">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all active:scale-95">CANCEL</button></div>
                                     </div>
                                 ) : (
-                                    <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed italic break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
+                                    <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
                                 )}
                             </div>
                             <div className="pt-6 border-t border-slate-50 flex items-center gap-3 mt-auto">
@@ -740,7 +905,7 @@ function App() {
                         <form onSubmit={handleSaveTag} className="p-6 space-y-4">
                             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
                             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Pick a Color</label><div className="flex items-center gap-3"><input type="color" value={tagColorInput} onChange={e => setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium text-slate-600 uppercase font-mono">{tagColorInput}</span></div></div>
-                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
+                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
                         </form>
                     </div>
                 </div>
@@ -753,9 +918,12 @@ function App() {
                         <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
                         <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
                             <input type="url" required placeholder="Tweet URL (https://x.com/...)" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" />
-                            <div className="grid grid-cols-2 gap-4"><input type="text" placeholder="Folder" value={newFolder} onChange={e => setNewFolder(e.target.value)} list="folder-options" className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /><datalist id="folder-options">{customFolders.map(f => <option key={f.id} value={f.name} />)}</datalist><input type="text" placeholder="Tags (comma separated)" value={newTags} onChange={e => setNewTags(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <CustomDropdown value={newFolder} onChange={setNewFolder} options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]} isMulti={false} />
+                                <CustomDropdown value={newTags} onChange={setNewTags} options={customTags} isMulti={true} />
+                            </div>
                             <textarea placeholder="Your Note..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none resize-none transition-all" ></textarea>
-                            <button type="submit" className="w-full bg-black text-white py-4 rounded-xl font-bold text-sm shadow-lg">Add to Collection</button>
+                            <button type="submit" className="w-full bg-green-600 text-white py-4 rounded-xl font-bold text-sm shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">Add to Collection</button>
                         </form>
                     </div>
                 </div>
@@ -798,7 +966,7 @@ function App() {
                         <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
                             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
                             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
-                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
+                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
                         </form>
                     </div>
                 </div>
