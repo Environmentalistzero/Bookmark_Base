@@ -132,10 +132,22 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
             {medias.length > 0 && (
                 <div className={`rounded-2xl overflow-hidden border border-slate-100 bg-transparent ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1 aspect-square md:aspect-video' : ''}`}>
                     {isVideo ? (
-                        <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity" onClick={(e) => { e.stopPropagation(); onImageClick(medias, 0, 'video', bookmark.posterUrl); }}>
-                            <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted playsInline />
-                            <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center z-10"><i className="fa-solid fa-play text-white text-xl ml-1"></i></div>
-                        </div>
+                        <a
+                            href={getHighResUrl(medias[0])}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity"
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                onImageClick(medias, 0, 'video', bookmark.posterUrl);
+                            }}
+                        >
+                            <video src={medias[0]} className="w-full h-full object-cover opacity-70 pointer-events-none" muted playsInline />
+                            <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center z-10 pointer-events-none">
+                                <i className="fa-solid fa-play text-white text-xl ml-1"></i>
+                            </div>
+                        </a>
                     ) : (
                         medias.map((url, idx) => {
                             let itemClass = "w-full h-full object-cover cursor-pointer hover:opacity-95 bg-slate-100 transition-all active:scale-[0.98]";
@@ -154,7 +166,7 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                                         onImageClick(medias, idx, 'image');
                                     }}
                                 >
-                                    <img src={url} alt="Media" className={itemClass} />
+                                    <img src={url} alt="Media" className={`${itemClass} pointer-events-none`} />
                                 </a>
                             );
                         })
@@ -377,10 +389,36 @@ function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [accentColor, setAccentColor] = useState(() => localStorage.getItem('tweetAccentColor') || '#000000');
     const [theme, setTheme] = useState(() => localStorage.getItem('tweetTheme') || 'light');
+    const [autoBackup, setAutoBackup] = useState(() => localStorage.getItem('tweetAutoBackup') === 'true');
+    const [lastBackup, setLastBackup] = useState(() => parseInt(localStorage.getItem('tweetLastBackup')) || 0);
 
     useEffect(() => {
         localStorage.setItem('tweetTheme', theme);
     }, [theme]);
+
+    useEffect(() => {
+        localStorage.setItem('tweetAutoBackup', autoBackup);
+    }, [autoBackup]);
+
+    // Auto backup logic
+    useEffect(() => {
+        if (!autoBackup || !isDbLoaded) return;
+
+        const now = Date.now();
+        const oneDay = 24 * 60 * 60 * 1000;
+
+        if (now - lastBackup > oneDay) {
+            // Delay auto-backup slightly after load to not interfere with startup
+            const timer = setTimeout(() => {
+                handleExportJSON(true); // true means silent/auto mode
+                const timestamp = Date.now();
+                setLastBackup(timestamp);
+                localStorage.setItem('tweetLastBackup', timestamp);
+                showToast('Automatic backup completed', 'success');
+            }, 5000);
+            return () => clearTimeout(timer);
+        }
+    }, [autoBackup, isDbLoaded, bookmarks.length]);
 
     // Toast notifications
     const [toasts, setToasts] = useState([]);
@@ -571,13 +609,28 @@ function App() {
     }, [previewState?.medias]);
 
     // --- HANDLERS ---
-    const handleExportJSON = () => {
-        const payload = { bookmarks, customFolders, customTags, trash };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `tweetmark-backup.json`;
-        a.click();
+    const handleExportJSON = (isAuto = false) => {
+        try {
+            const payload = {
+                bookmarks,
+                customFolders,
+                customTags,
+                trash,
+                exportDate: new Date().toISOString(),
+                version: '2.0'
+            };
+            const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const dateStr = new Date().toLocaleDateString().replace(/\//g, '-');
+            a.download = isAuto ? `tweetmark_auto_backup_${dateStr}.json` : `tweetmark_manual_backup_${dateStr}.json`;
+            a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 100);
+        } catch (err) {
+            console.error("Backup failed:", err);
+            showToast('Backup failed. Check console for details.', 'error');
+        }
     };
 
     const handleImportJSON = (event) => {
@@ -1314,6 +1367,43 @@ function App() {
                                         <p className="mt-3 text-[10px] font-medium text-slate-400 leading-relaxed italic">
                                             Performance starts to degrade after 100MB due to memory constraints.
                                         </p>
+                                    </div>
+                                </div>
+
+                                <div className="pt-6 border-t border-slate-50 font-sans">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Automatic Backup</label>
+                                        <div
+                                            onClick={() => setAutoBackup(!autoBackup)}
+                                            className={`w-10 h-5 rounded-full relative cursor-pointer transition-all duration-300 ${autoBackup ? 'bg-green-500' : 'bg-slate-200'}`}
+                                        >
+                                            <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-sm transition-all duration-300 ${autoBackup ? 'left-5.5' : 'left-0.5'}`} style={{ left: autoBackup ? '22px' : '2px' }}></div>
+                                        </div>
+                                    </div>
+                                    <p className="text-[10px] text-slate-400 font-medium leading-relaxed italic pr-8">
+                                        Automatically creates a JSON backup file once a day when you open the app.
+                                    </p>
+                                    <div className="mt-4 flex gap-2">
+                                        <button
+                                            onClick={() => { handleExportJSON(); }}
+                                            className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 py-3 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+                                        >
+                                            MANUAL EXPORT
+                                        </button>
+                                        <button
+                                            onClick={() => {
+                                                if (window.confirm("Clear all archived data? THIS CANNOT BE UNDONE!")) {
+                                                    db.bookmarks.clear();
+                                                    db.folders.clear();
+                                                    db.tags.clear();
+                                                    db.trash.clear();
+                                                    window.location.reload();
+                                                }
+                                            }}
+                                            className="flex-1 bg-red-50 hover:bg-red-100 text-red-500 py-3 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+                                        >
+                                            WIPE DATABASE
+                                        </button>
                                     </div>
                                 </div>
                             </div>
