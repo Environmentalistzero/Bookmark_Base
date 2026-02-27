@@ -1,7 +1,21 @@
-const { useState, useEffect, useMemo, useRef } = React;
+const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
 const TAG_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 const getRandomColor = () => TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
+
+const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) {
+            // Try parsing MM/DD/YYYY format
+            const parts = dateStr.split('/');
+            if (parts.length === 3) return `${parts[1].padStart(2, '0')}.${parts[0].padStart(2, '0')}.${parts[2]}`;
+            return dateStr;
+        }
+        return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+    } catch { return dateStr; }
+};
 
 const safeDecode = (str) => {
     if (!str) return '';
@@ -124,13 +138,24 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                         </div>
                     ) : (
                         medias.map((url, idx) => {
-                            let itemClass = "w-full h-full object-cover cursor-zoom-in hover:opacity-95 bg-slate-100 transition-all active:scale-[0.98]";
+                            let itemClass = "w-full h-full object-cover cursor-pointer hover:opacity-95 bg-slate-100 transition-all active:scale-[0.98]";
                             let wrapperClass = "relative";
                             if (medias.length === 3 && idx === 0) wrapperClass = "row-span-2 h-full";
                             return (
-                                <div key={idx} className={wrapperClass}>
-                                    <img src={url} alt="Media" onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }} className={itemClass} />
-                                </div>
+                                <a
+                                    key={idx}
+                                    href={getHighResUrl(url)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className={wrapperClass}
+                                    onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        onImageClick(medias, idx, 'image');
+                                    }}
+                                >
+                                    <img src={url} alt="Media" className={itemClass} />
+                                </a>
                             );
                         })
                     )}
@@ -351,6 +376,22 @@ function App() {
 
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [accentColor, setAccentColor] = useState(() => localStorage.getItem('tweetAccentColor') || '#000000');
+    const [theme, setTheme] = useState(() => localStorage.getItem('tweetTheme') || 'light');
+
+    useEffect(() => {
+        localStorage.setItem('tweetTheme', theme);
+    }, [theme]);
+
+    // Toast notifications
+    const [toasts, setToasts] = useState([]);
+    const toastIdRef = useRef(0);
+    const showToast = useCallback((message, type = 'info', undoAction = null, duration = 4000) => {
+        const id = ++toastIdRef.current;
+        setToasts(prev => [...prev, { id, message, type, undoAction }]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration);
+        return id;
+    }, []);
+    const dismissToast = useCallback((id) => setToasts(prev => prev.filter(t => t.id !== id)), []);
 
     // --- EFFECTS ---
     useEffect(() => {
@@ -561,7 +602,7 @@ function App() {
                 }
 
                 if (!valid) {
-                    alert("Tamamen hatalı veya bozuk bir JSON dosyası yüklediniz. İşlem iptal edildi.");
+                    showToast('Invalid or corrupted JSON file. Operation cancelled.', 'error');
                     return;
                 }
 
@@ -570,9 +611,9 @@ function App() {
                 if (data.customTags && Array.isArray(data.customTags)) setCustomTags(data.customTags);
                 if (data.trash && Array.isArray(data.trash)) setTrash(data.trash);
 
-                alert("Backup başarıyla yüklendi!");
+                showToast('Backup loaded successfully!', 'success');
             } catch (err) {
-                alert("JSON ayrıştırma hatası! Dosyanın bozuk olmadığından emin olun.");
+                showToast('JSON parse error! Make sure the file is not corrupted.', 'error');
                 console.error("Import JSON Error:", err);
             }
         };
@@ -582,7 +623,7 @@ function App() {
     const handleAddBookmark = (e) => {
         e.preventDefault();
         const tweetId = extractTweetId(newUrl);
-        if (!tweetId) return alert("Please enter a valid tweet link.");
+        if (!tweetId) return showToast('Please enter a valid tweet link.', 'error');
 
         const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
         const newTagsList = [...customTags];
@@ -617,6 +658,11 @@ function App() {
             setTrash(prev => [{ ...item, deletedAt: Date.now() }, ...prev]);
             setBookmarks(prev => prev.filter(b => b.id !== id));
             if (focusedTweet && focusedTweet.id === id) setFocusedTweet(null);
+            showToast('Moved to trash', 'info', () => {
+                // Undo: restore the item
+                setTrash(prev => prev.filter(t => t.id !== id));
+                setBookmarks(prev => [item, ...prev]);
+            });
         }
     };
 
@@ -632,15 +678,32 @@ function App() {
 
     const handlePermanentDelete = (e, id) => {
         e.stopPropagation();
-        if (window.confirm("Are you sure you want to permanently delete this?")) {
-            setTrash(prev => prev.filter(t => t.id !== id));
-        }
+        const item = trash.find(t => t.id === id);
+        setTrash(prev => prev.filter(t => t.id !== id));
+        showToast('Permanently deleted', 'info', () => {
+            if (item) setTrash(prev => [item, ...prev]);
+        });
     };
 
     const handleClearTrash = () => {
         if (trash.length === 0) return;
+        const oldTrash = [...trash];
         setTrash([]);
+        showToast(`${oldTrash.length} item(s) permanently deleted`, 'info', () => {
+            setTrash(oldTrash);
+        });
     };
+
+    // Auto-cleanup: remove trash items older than 30 days
+    useEffect(() => {
+        if (trash.length === 0) return;
+        const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+        const expired = trash.filter(t => t.deletedAt && t.deletedAt < thirtyDaysAgo);
+        if (expired.length > 0) {
+            setTrash(prev => prev.filter(t => !t.deletedAt || t.deletedAt >= thirtyDaysAgo));
+            console.log(`Auto-cleaned ${expired.length} expired trash item(s)`);
+        }
+    }, [trash.length]);
 
     const handleSaveFolder = (e) => {
         e.preventDefault();
@@ -711,7 +774,7 @@ function App() {
 
     const filteredBookmarks = useMemo(() => {
         const source = activeFolder === 'Trash' ? trash : bookmarks;
-        return source.filter(b => {
+        const filtered = source.filter(b => {
             let mF = false;
             if (activeFolder === 'All' || activeFolder === 'Trash') mF = true;
             else if (activeFolder === 'Unsorted') mF = (!b.folder || b.folder === 'General' || b.folder === 'Genel');
@@ -725,22 +788,53 @@ function App() {
             const s = debouncedSearchQuery.toLowerCase();
             return mF && (!s || (b.tags || []).some(t => t.includes(s)) || (b.description || '').toLowerCase().includes(s) || (b.tweetText || '').toLowerCase().includes(s) || (b.authorName || '').toLowerCase().includes(s));
         });
+        // Sort newest first by id (which is Date.now timestamp)
+        return filtered.sort((a, b) => {
+            const aTime = parseInt(a.id) || 0;
+            const bTime = parseInt(b.id) || 0;
+            return bTime - aTime;
+        });
     }, [bookmarks, trash, activeFolder, debouncedSearchQuery, customFolders]);
+
+    // Helper: check if targetId is a descendant of folderId
+    const isDescendantOf = (targetId, folderId) => {
+        const children = customFolders.filter(f => f.parentId === folderId);
+        for (const child of children) {
+            if (child.id === targetId) return true;
+            if (isDescendantOf(targetId, child.id)) return true;
+        }
+        return false;
+    };
 
     const FolderItem = ({ folder, depth = 0 }) => {
         const children = customFolders.filter(f => f.parentId === folder.id);
         const isExpanded = expandedFolders.includes(folder.id);
         const isActive = activeFolder === folder.name;
+        const isDragOver = dragOverFolderId === folder.id;
         return (
             <div className="w-full">
-                <div draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'folder', id: folder.id }; }} onDragOver={(e) => { e.preventDefault(); setDragOverFolderId(folder.id); }} onDragLeave={() => setDragOverFolderId(null)} onDrop={(e) => {
-                    e.preventDefault(); setDragOverFolderId(null);
-                    const data = dragItemRef.current;
-                    if (!data || (data.type === 'folder' && data.id === folder.id)) return;
-                    if (data.type === 'folder') setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: folder.id } : f));
-                    else if (data.type === 'tweet') setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
-                    dragItemRef.current = null;
-                }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0', ...(isActive ? { backgroundColor: accentColor } : {}) }}>
+                <div
+                    draggable
+                    onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'folder', id: folder.id }; }}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverFolderId(folder.id); }}
+                    onDragLeave={(e) => { e.stopPropagation(); if (dragOverFolderId === folder.id) setDragOverFolderId(null); }}
+                    onDrop={(e) => {
+                        e.preventDefault(); e.stopPropagation(); setDragOverFolderId(null);
+                        const data = dragItemRef.current;
+                        if (!data) return;
+                        if (data.type === 'folder') {
+                            // Can't drop on self, can't drop parent into its own descendant
+                            if (data.id === folder.id) return;
+                            if (isDescendantOf(folder.id, data.id)) return;
+                            setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: folder.id } : f));
+                        } else if (data.type === 'tweet') {
+                            setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
+                        }
+                        dragItemRef.current = null;
+                    }}
+                    className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white' : 'text-slate-600 hover:bg-slate-100'} ${isDragOver ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                    style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0', ...(isActive && !isDragOver ? { backgroundColor: accentColor } : {}) }}
+                >
                     <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
                     <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 pl-1 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
                     <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
@@ -768,7 +862,69 @@ function App() {
     }
 
     return (
-        <div className="flex h-screen w-full bg-slate-50 text-slate-800 font-sans overflow-hidden">
+        <div className={`flex h-screen w-full bg-slate-50 text-slate-800 font-sans overflow-hidden theme-${theme}`}>
+
+            {/* MOBILE SIDEBAR OVERLAY */}
+            {isSidebarOpen && (
+                <div className="fixed inset-0 z-[80] sm:hidden">
+                    <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
+                    <aside className="relative w-72 h-full bg-white shadow-2xl flex flex-col animate-slide-in-left">
+                        <div className="p-5 flex items-center justify-between border-b border-slate-50">
+                            <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
+                                <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
+                            </div>
+                            <button onClick={() => setIsSidebarOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full"><i className="fa-solid fa-times text-slate-400"></i></button>
+                        </div>
+                        <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
+                            <div className="space-y-0.5">
+                                <div onClick={() => { setActiveFolder('All'); setIsSidebarOpen(false); }} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'All' ? { backgroundColor: accentColor } : {}}>
+                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-layer-group"></i> All Bookmarks</button>
+                                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
+                                </div>
+                                <div onClick={() => { setActiveFolder('Unsorted'); setIsSidebarOpen(false); }} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'Unsorted' ? { backgroundColor: accentColor } : {}}>
+                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-inbox"></i> Unsorted</button>
+                                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2><button onClick={(e) => { e.stopPropagation(); setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
+                                <div className="space-y-0.5">
+                                    {customFolders.filter(f => !f.parentId).map(f => renderFolderItem(f, 0, true))}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="group flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
+                                    <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
+                                    <div className="flex items-center gap-1.5">
+                                        <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); setIsSidebarOpen(false); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black transition-all" title="View all tags"><i className="fa-solid fa-eye text-[10px]"></i></button>
+                                        <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                                    </div>
+                                </div>
+                                {isTagsExpanded && (
+                                    <div className="space-y-0.5">
+                                        {customTags.map(tag => {
+                                            const tagCount = bookmarks.filter(b => (b.tags || []).includes(tag.name)).length;
+                                            return (
+                                                <div key={tag.id} onClick={() => { setActiveFolder(`tag:${tag.name}`); setIsSidebarOpen(false); }} className={`flex items-center cursor-pointer rounded-xl transition-all px-3 py-2 ${activeFolder === `tag:${tag.name}` ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>
+                                                    <span className="font-black mr-1.5" style={{ color: tag.color }}>#</span>
+                                                    <span className="text-[14px] font-medium">{tag.name}</span>
+                                                    <span className="ml-auto text-[11px] font-bold opacity-50">{tagCount}</span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                        <div className="p-4 border-t border-slate-100 flex gap-2">
+                            <button onClick={() => { setActiveFolder('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFolder === 'Trash' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><i className="fa-solid fa-trash"></i> Trash</button>
+                            <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-xl"><i className="fa-solid fa-gear"></i></button>
+                        </div>
+                    </aside>
+                </div>
+            )}
+
             <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm hidden sm:flex">
                 <div className="p-6 flex items-center gap-3 border-b border-slate-50">
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
@@ -786,13 +942,32 @@ function App() {
                         </div>
                     </div>
                     <div>
-                        <div className="flex justify-between items-center mb-2 px-2"><h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2><button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
+                        <div
+                            className={`flex justify-between items-center mb-2 px-2 rounded-lg transition-all ${dragOverFolderId === 'root' ? 'bg-blue-50 ring-2 ring-blue-400 ring-dashed py-1' : ''}`}
+                            onDragOver={(e) => { e.preventDefault(); setDragOverFolderId('root'); }}
+                            onDragLeave={() => { if (dragOverFolderId === 'root') setDragOverFolderId(null); }}
+                            onDrop={(e) => {
+                                e.preventDefault(); setDragOverFolderId(null);
+                                const data = dragItemRef.current;
+                                if (!data) return;
+                                if (data.type === 'folder') {
+                                    setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: null } : f));
+                                }
+                                dragItemRef.current = null;
+                            }}
+                        >
+                            <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2>
+                            <button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                        </div>
                         <div className="space-y-0">{topLevelFolders.map(f => <FolderItem key={f.id} folder={f} />)}</div>
                     </div>
                     <div>
-                        <div className="flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
+                        <div className="group flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
                             <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
-                            <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-5 h-5 flex items-center justify-center text-slate-400 hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                            <div className="flex items-center gap-1.5">
+                                <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black opacity-0 group-hover:opacity-100 transition-all" title="View all tags"><i className="fa-solid fa-eye text-[10px]"></i></button>
+                                <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                            </div>
                         </div>
                         {isTagsExpanded && (
                             <div className="space-y-0.5 mt-1">
@@ -800,7 +975,7 @@ function App() {
                                     const isActive = activeFolder === `tag:${tag.name}`;
                                     return (
                                         <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white shadow-sm' : 'hover:bg-slate-100'}`} style={isActive ? { backgroundColor: accentColor } : {}}>
-                                            <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-3 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="w-2 h-2 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: tag.color }}></span> #{tag.name}</button>
+                                            <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-2 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="font-black text-[13px] shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span> {tag.name}</button>
                                             <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{bookmarks.filter(b => (b.tags || []).includes(tag.name)).length}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button></div>
                                         </div>
                                     );
@@ -827,68 +1002,122 @@ function App() {
             </aside>
 
             <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
-                <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-40 shrink-0">
-                    <div className="flex items-center gap-4"><button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button><h2 className="text-lg font-bold text-slate-900 capitalize">{activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2></div>
-                    <div className="flex items-center gap-4">
+                <header className="h-16 sm:h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sm:px-8 z-40 shrink-0">
+                    <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+                        <button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg shrink-0" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button>
+                        <h2 className="text-base sm:text-lg font-bold text-slate-900 capitalize truncate">{activeFolder === 'AllTags' ? 'All Tags' : activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2>
+                    </div>
+                    <div className="flex items-center gap-2 sm:gap-4">
                         <div className="relative hidden md:block">
                             <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
                             <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-11 pr-4 py-2.5 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-80 focus:bg-white focus:border-slate-200 focus:ring-4 focus:ring-slate-50 outline-none transition-all" />
                         </div>
                         <div className="h-8 w-[1px] bg-slate-100 mx-1 hidden md:block"></div>
                         <div className="relative" tabIndex="0" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsGridMenuOpen(false); }}>
-                            <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i> {gridCols} Column</button>
+                            <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-3 sm:px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i><span className="hidden sm:inline"> {gridCols} Column</span></button>
                             {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
                         </div>
                         {activeFolder === 'Trash' ? (
                             <button onClick={handleClearTrash} className="text-white bg-red-500 px-5 py-2.5 rounded-full text-xs font-bold hover:bg-red-600 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-trash-can mr-2"></i> CLEAR ALL</button>
                         ) : (
-                            <button onClick={() => setIsModalOpen(true)} className="text-white px-5 py-2.5 rounded-full text-xs font-bold hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-plus mr-2"></i> NEW</button>
+                            <button onClick={() => setIsModalOpen(true)} className="text-white px-4 sm:px-5 py-2 sm:py-2.5 rounded-full text-xs font-bold hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-plus sm:mr-2"></i><span className="hidden sm:inline"> NEW</span></button>
                         )}
                     </div>
                 </header>
-                <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
-                    <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-6`}>
-                        {filteredBookmarks.slice(0, visibleCount).map(b => (
-                            <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-4`}>
-                                <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
-
-                                <div className="mt-4 space-y-3">
-                                    {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
-
-                                    <div className="flex items-center justify-between gap-2">
-                                        <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-                                            <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder || 'Unsorted'}</span>
-                                            {(b.tags || []).map(tag => {
-                                                const tO = customTags.find(t => t.name === tag);
-                                                return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: tO?.color || '#64748b' }}></span> #{tag}</span>;
-                                            })}
-                                        </div>
-                                        <div className="flex items-center gap-2 shrink-0">
-                                            {activeFolder === 'Trash' ? (
-                                                <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><i className="fa-solid fa-rotate-left"></i></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><i className="fa-solid fa-trash"></i></button></div>
-                                            ) : (
-                                                <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><i className="fa-solid fa-trash-can text-[13px]"></i></button>
-                                            )}
-                                            <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></a>
-                                        </div>
+                <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8 custom-scrollbar">
+                    {activeFolder === 'AllTags' ? (
+                        <div className="mx-auto max-w-4xl">
+                            <div className="mb-8">
+                                <div className="flex items-center gap-3 mb-2">
+                                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center"><i className="fa-solid fa-tags text-slate-500"></i></div>
+                                    <div>
+                                        <h3 className="text-xl font-bold text-slate-900">Tag Collection</h3>
+                                        <p className="text-sm text-slate-400 font-medium">{customTags.length} tag{customTags.length !== 1 ? 's' : ''} in your archive</p>
                                     </div>
                                 </div>
                             </div>
-                        ))}
-                    </div></div>
-                    {filteredBookmarks.length > visibleCount && <div ref={observerTarget} className="h-10 w-full" />}
-                    {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
+                            {customTags.length > 0 ? (
+                                <div className="flex flex-wrap gap-3">
+                                    {customTags.map(tag => {
+                                        const count = bookmarks.filter(b => (b.tags || []).includes(tag.name)).length;
+                                        return (
+                                            <button
+                                                key={tag.id}
+                                                onClick={() => setActiveFolder(`tag:${tag.name}`)}
+                                                className="group flex items-center gap-2.5 px-5 py-3 rounded-2xl text-[14px] font-bold transition-all active:scale-95 border bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
+                                            >
+                                                <span className="font-black text-[16px]" style={{ color: tag.color }}>#</span>
+                                                <span>{tag.name}</span>
+                                                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-400 ml-1">{count}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="flex flex-col items-center justify-center py-20 opacity-30">
+                                    <i className="fa-solid fa-tags text-4xl mb-4"></i>
+                                    <p className="text-sm font-bold uppercase tracking-widest">No Tags Yet</p>
+                                    <p className="text-xs mt-2">Tags will appear here as you add them to your bookmarks</p>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <>
+                            <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-3 sm:gap-6`}>
+                                {filteredBookmarks.slice(0, visibleCount).map(b => (
+                                    <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-3 sm:mb-6 group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
+                                        <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
+
+                                        <div className="mt-4 space-y-3">
+                                            {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
+
+                                            <div className="flex items-center justify-between gap-2">
+                                                <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+                                                    <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder || 'Unsorted'}</span>
+                                                    {(b.tags || []).map(tag => {
+                                                        const tO = customTags.find(t => t.name === tag);
+                                                        return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="font-black" style={{ color: tO?.color || '#64748b' }}>#</span>{tag}</span>;
+                                                    })}
+                                                </div>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    {activeFolder === 'Trash' ? (
+                                                        <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><i className="fa-solid fa-rotate-left"></i></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><i className="fa-solid fa-trash"></i></button></div>
+                                                    ) : (
+                                                        <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><i className="fa-solid fa-trash-can text-[13px]"></i></button>
+                                                    )}
+                                                    <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></a>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div></div>
+                            {filteredBookmarks.length > visibleCount && <div ref={observerTarget} className="h-10 w-full" />}
+                            {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
+                        </>
+                    )}
                 </div>
             </main>
 
             {/* EDIT (FOCUS) MODAL */}
             {
                 focusedTweet && (
-                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
-                        <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex-1 bg-slate-50 p-8 sm:p-16 lg:p-24 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[400px]"><div className="w-full max-w-lg">{focusedTweet.tweetText ? <div className="scale-105 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <div className="scale-110"><TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} /></div>}</div></div>
-                            <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
-                                <div><div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span><div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div></div>
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-2 sm:p-4 md:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
+                        <div className="bg-white w-full max-w-5xl rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex-1 bg-slate-100 p-4 sm:p-8 md:p-12 lg:p-16 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[200px] sm:min-h-[400px]">
+                                <div className="w-full max-w-lg bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-5">
+                                    {focusedTweet.tweetText ? <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />}
+                                </div>
+                            </div>
+                            <div className="w-full md:w-[350px] p-5 sm:p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
+                                <div>
+                                    <div className="flex justify-between items-start mb-6">
+                                        <div>
+                                            <span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center w-fit"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span>
+                                            {focusedTweet.date && <p className="text-[11px] text-slate-400 font-medium mt-2 ml-1"><i className="fa-regular fa-calendar mr-1.5"></i>{formatDate(focusedTweet.date)}</p>}
+                                        </div>
+                                        <div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div>
+                                    </div>
                                     {isEditingFocus ? (
                                         <div className="space-y-4 mb-8">
                                             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
@@ -913,7 +1142,7 @@ function App() {
                                             <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-green-600 text-white py-3 rounded-xl text-xs font-bold hover:bg-green-700 transition-all shadow-md shadow-green-600/20 active:scale-95">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all active:scale-95">CANCEL</button></div>
                                         </div>
                                     ) : (
-                                        <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
+                                        <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="font-black" style={{ color: customTags.find(t => t.name === tag)?.color || '#64748b' }}>#</span>{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
                                     )}
                                 </div>
                                 <div className="pt-6 border-t border-slate-50 flex items-center gap-3 mt-auto">
@@ -1035,6 +1264,33 @@ function App() {
                                         <input type="text" value={accentColor} onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) setAccentColor(e.target.value); }} onBlur={e => { if (!/^#[0-9a-fA-F]{6}$/i.test(accentColor) && !/^#[0-9a-fA-F]{3}$/i.test(accentColor)) setAccentColor('#000000'); }} className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-sm font-mono uppercase outline-none focus:bg-white transition-all" />
                                     </div>
                                 </div>
+
+                                <div className="pt-6 border-t border-slate-50">
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-4">Display Theme</label>
+                                    <div className="grid grid-cols-3 gap-3">
+                                        {[
+                                            { id: 'light', name: 'Light', bg: '#f8fafc', text: '#0f172a', border: '#e2e8f0' },
+                                            { id: 'dark', name: 'Classic Dark', bg: '#15202b', text: '#ffffff', border: '#38444d' },
+                                            { id: 'oldschool', name: 'Old School', bg: '#000000', text: '#d9d9d9', border: '#2f3336' }
+                                        ].map(t => (
+                                            <button
+                                                key={t.id}
+                                                onClick={() => setTheme(t.id)}
+                                                className={`relative overflow-hidden group p-3 rounded-2xl border-2 transition-all flex flex-col gap-2 items-center ${theme === t.id ? 'border-blue-500 bg-blue-50/10' : 'border-slate-100 bg-slate-50 hover:border-slate-200'}`}
+                                            >
+                                                <div className="w-full h-8 rounded-lg shadow-inner flex items-center justify-center text-[10px] font-bold" style={{ backgroundColor: t.bg, color: t.text, border: `1px solid ${t.border}` }}>
+                                                    Aa
+                                                </div>
+                                                <span className={`text-[11px] font-bold ${theme === t.id ? 'text-blue-600' : 'text-slate-500'}`}>{t.name}</span>
+                                                {theme === t.id && (
+                                                    <div className="absolute top-1 right-1 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
+                                                        <i className="fa-solid fa-check text-[8px] text-white"></i>
+                                                    </div>
+                                                )}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
                                 <div className="pt-6 border-t border-slate-50">
                                     <div className="flex justify-between items-center mb-4">
                                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Storage Usage (IndexedDB)</label>
@@ -1065,7 +1321,24 @@ function App() {
                     </div>
                 )
             }
-        </div>
+
+            {/* TOAST NOTIFICATIONS */}
+            {toasts.length > 0 && (
+                <div className="fixed bottom-4 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-6 sm:bottom-6 z-[300] flex flex-col gap-2.5 pointer-events-none w-[calc(100%-2rem)] sm:w-auto">
+                    {toasts.map(toast => (
+                        <div key={toast.id} className="pointer-events-auto flex items-center gap-3 px-5 py-3.5 bg-white border border-slate-200 rounded-2xl shadow-xl text-sm font-semibold text-slate-700 animate-slide-in-right min-w-[280px] max-w-[400px]">
+                            <i className={`text-xs ${toast.type === 'success' ? 'fa-solid fa-check-circle text-green-500' : toast.type === 'error' ? 'fa-solid fa-exclamation-circle text-red-500' : 'fa-solid fa-info-circle text-blue-500'}`}></i>
+                            <span className="flex-1">{toast.message}</span>
+                            {toast.undoAction && (
+                                <button onClick={() => { toast.undoAction(); dismissToast(toast.id); }} className="text-xs font-bold text-blue-600 hover:text-blue-700 uppercase tracking-wider shrink-0 px-2 py-1 hover:bg-blue-50 rounded-lg transition-all">Undo</button>
+                            )}
+                            <button onClick={() => dismissToast(toast.id)} className="text-slate-300 hover:text-slate-500 transition-colors ml-1"><i className="fa-solid fa-times text-xs"></i></button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+        </div >
     );
 }
 // Initial Render
