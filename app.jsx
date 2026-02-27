@@ -298,6 +298,7 @@ function App() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isGridMenuOpen, setIsGridMenuOpen] = useState(false);
+    const [focusedTweet, setFocusedTweet] = useState(null);
     const [previewState, setPreviewState] = useState(null);
     const [expandedFolders, setExpandedFolders] = useState([]);
     const [storageInfo, setStorageInfo] = useState({ used: 0, quota: 0 });
@@ -1068,19 +1069,12 @@ function App() {
     );
 }
 // Initial Render
-const initApp = () => {
-    try {
-        const rootElement = document.getElementById('root');
-        if (!rootElement) return;
+try {
+    const rootElement = document.getElementById('root');
+    if (rootElement) {
         const root = ReactDOM.createRoot(rootElement);
         root.render(<App />);
-    } catch (e) {
-        console.error("Failed to render App:", e);
     }
-};
-
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', initApp);
-} else {
-    initApp();
+} catch (e) {
+    console.error("Failed to render App:", e);
 }
