@@ -732,7 +732,7 @@ function App() {
         const isActive = activeFolder === folder.name;
         return (
             <div className="w-full">
-                <div draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onDragOver={(e) => { e.preventDefault(); setDragOverFolderId(folder.id); }} onDragLeave={() => setDragOverFolderId(null)} onDrop={(e) => {
+                <div draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'folder', id: folder.id }; }} onDragOver={(e) => { e.preventDefault(); setDragOverFolderId(folder.id); }} onDragLeave={() => setDragOverFolderId(null)} onDrop={(e) => {
                     e.preventDefault(); setDragOverFolderId(null);
                     const data = dragItemRef.current;
                     if (!data || (data.type === 'folder' && data.id === folder.id)) return;
@@ -740,7 +740,7 @@ function App() {
                     else if (data.type === 'tweet') setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
                     dragItemRef.current = null;
                 }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0', ...(isActive ? { backgroundColor: accentColor } : {}) }}>
-                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 && 'invisible'}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
+                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
                     <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 pl-1 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
                     <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
                 </div>
@@ -823,7 +823,7 @@ function App() {
                         <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><i className="fa-solid fa-gear text-sm"></i></button>
                     </div>
                 </div>
-            </aside >
+            </aside>
 
             <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
                 <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-40 shrink-0">
@@ -1064,8 +1064,23 @@ function App() {
                     </div>
                 )
             }
-        </div >
+        </div>
     );
 }
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);
+// Initial Render
+const initApp = () => {
+    try {
+        const rootElement = document.getElementById('root');
+        if (!rootElement) return;
+        const root = ReactDOM.createRoot(rootElement);
+        root.render(<App />);
+    } catch (e) {
+        console.error("Failed to render App:", e);
+    }
+};
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initApp);
+} else {
+    initApp();
+}
