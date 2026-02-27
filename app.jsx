@@ -116,14 +116,23 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                 {renderFormattedText(bookmark.tweetText)}
             </p>
             {medias.length > 0 && (
-                <div className={`rounded-2xl overflow-hidden border border-slate-100 bg-black/5 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
+                <div className={`rounded-2xl overflow-hidden border border-slate-100 bg-transparent ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1 aspect-square md:aspect-video' : ''}`}>
                     {isVideo ? (
                         <div className="relative w-full bg-black flex items-center justify-center aspect-video cursor-pointer hover:opacity-90 transition-opacity" onClick={(e) => { e.stopPropagation(); onImageClick(medias, 0, 'video', bookmark.posterUrl); }}>
                             <video src={medias[0]} className="w-full h-full object-cover opacity-70" muted playsInline />
                             <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center z-10"><i className="fa-solid fa-play text-white text-xl ml-1"></i></div>
                         </div>
                     ) : (
-                        medias.map((url, idx) => <img key={idx} src={url} alt="Media" onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }} className="w-full h-auto object-cover max-h-80 cursor-zoom-in hover:opacity-95 bg-slate-100" />)
+                        medias.map((url, idx) => {
+                            let itemClass = "w-full h-full object-cover cursor-zoom-in hover:opacity-95 bg-slate-100 transition-all active:scale-[0.98]";
+                            let wrapperClass = "relative";
+                            if (medias.length === 3 && idx === 0) wrapperClass = "row-span-2 h-full";
+                            return (
+                                <div key={idx} className={wrapperClass}>
+                                    <img src={url} alt="Media" onClick={(e) => { e.stopPropagation(); onImageClick(medias, idx, 'image'); }} className={itemClass} />
+                                </div>
+                            );
+                        })
                     )}
                 </div>
             )}
@@ -289,9 +298,20 @@ function App() {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [isGridMenuOpen, setIsGridMenuOpen] = useState(false);
-    const [focusedTweet, setFocusedTweet] = useState(null);
     const [previewState, setPreviewState] = useState(null);
     const [expandedFolders, setExpandedFolders] = useState([]);
+    const [storageInfo, setStorageInfo] = useState({ used: 0, quota: 0 });
+
+    useEffect(() => {
+        if (navigator.storage && navigator.storage.estimate) {
+            navigator.storage.estimate().then(estimate => {
+                setStorageInfo({
+                    used: estimate.usage || 0,
+                    quota: estimate.quota || 0
+                });
+            });
+        }
+    }, [bookmarks, trash]);
     const [dragOverFolderId, setDragOverFolderId] = useState(null);
     const dragItemRef = useRef(null);
 
@@ -788,18 +808,32 @@ function App() {
                         )}
                     </div>
                 </div>
-                <div className="p-4 border-t border-slate-100 flex items-center gap-2">
-                    <button onClick={() => setActiveFolder('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash</button>
-                    <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><i className="fa-solid fa-gear text-sm"></i></button>
+                <div className="p-4 border-t border-slate-100 space-y-3">
+                    <div className="flex gap-2">
+                        <button onClick={handleExportJSON} className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[12px] font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all">
+                            <i className="fa-solid fa-download text-[14px]"></i> Save
+                        </button>
+                        <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[12px] font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all cursor-pointer">
+                            <i className="fa-solid fa-upload text-[14px]"></i> Load
+                            <input type="file" accept=".json" className="hidden" onChange={handleImportJSON} />
+                        </label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => setActiveFolder('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash</button>
+                        <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><i className="fa-solid fa-gear text-sm"></i></button>
+                    </div>
                 </div>
-            </aside>
+            </aside >
 
             <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
                 <header className="h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-8 z-40 shrink-0">
                     <div className="flex items-center gap-4"><button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button><h2 className="text-lg font-bold text-slate-900 capitalize">{activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2></div>
                     <div className="flex items-center gap-4">
-                        <div className="relative hidden md:block"><i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-slate-300 text-xs"></i><input type="text" placeholder="Search notes, tags, or profiles..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-64 focus:bg-white focus:border-slate-200 outline-none transition-all" /></div>
-                        <div className="flex bg-slate-100 rounded-full p-1"><button onClick={handleExportJSON} className="p-2 text-slate-500 hover:text-black transition-colors" title="Download Backup"><i className="fa-solid fa-download text-xs"></i></button><label className="p-2 text-slate-500 hover:text-black cursor-pointer" title="Upload Backup"><i className="fa-solid fa-upload text-xs"></i><input type="file" accept=".json" className="hidden" onChange={handleImportJSON} /></label></div>
+                        <div className="relative hidden md:block">
+                            <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                            <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-11 pr-4 py-2.5 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-80 focus:bg-white focus:border-slate-200 focus:ring-4 focus:ring-slate-50 outline-none transition-all" />
+                        </div>
+                        <div className="h-8 w-[1px] bg-slate-100 mx-1 hidden md:block"></div>
                         <div className="relative" tabIndex="0" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsGridMenuOpen(false); }}>
                             <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i> {gridCols} Column</button>
                             {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
@@ -847,154 +881,190 @@ function App() {
             </main>
 
             {/* EDIT (FOCUS) MODAL */}
-            {focusedTweet && (
-                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
-                    <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex-1 bg-slate-50 p-8 sm:p-16 lg:p-24 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[400px]"><div className="w-full max-w-lg">{focusedTweet.tweetText ? <div className="scale-105 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <div className="scale-110"><TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} /></div>}</div></div>
-                        <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
-                            <div><div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span><div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div></div>
-                                {isEditingFocus ? (
-                                    <div className="space-y-4 mb-8">
-                                        <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Folder</label>
-                                            <CustomDropdown
-                                                value={focusEditFolder}
-                                                onChange={setFocusEditFolder}
-                                                options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]}
-                                                isMulti={false}
-                                            />
+            {
+                focusedTweet && (
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-4 sm:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
+                        <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex-1 bg-slate-50 p-8 sm:p-16 lg:p-24 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[400px]"><div className="w-full max-w-lg">{focusedTweet.tweetText ? <div className="scale-105 transform origin-top"><CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /></div> : <div className="scale-110"><TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} /></div>}</div></div>
+                            <div className="w-full md:w-[350px] p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
+                                <div><div className="flex justify-between items-start mb-8"><span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span><div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div></div>
+                                    {isEditingFocus ? (
+                                        <div className="space-y-4 mb-8">
+                                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Folder</label>
+                                                <CustomDropdown
+                                                    value={focusEditFolder}
+                                                    onChange={setFocusEditFolder}
+                                                    options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]}
+                                                    isMulti={false}
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label>
+                                                <CustomDropdown
+                                                    value={focusEditTags}
+                                                    onChange={setFocusEditTags}
+                                                    options={customTags}
+                                                    isMulti={true}
+                                                />
+                                            </div>
+                                            <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-green-600 text-white py-3 rounded-xl text-xs font-bold hover:bg-green-700 transition-all shadow-md shadow-green-600/20 active:scale-95">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all active:scale-95">CANCEL</button></div>
                                         </div>
-                                        <div>
-                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label>
-                                            <CustomDropdown
-                                                value={focusEditTags}
-                                                onChange={setFocusEditTags}
-                                                options={customTags}
-                                                isMulti={true}
-                                            />
-                                        </div>
-                                        <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-green-600 text-white py-3 rounded-xl text-xs font-bold hover:bg-green-700 transition-all shadow-md shadow-green-600/20 active:scale-95">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all active:scale-95">CANCEL</button></div>
-                                    </div>
-                                ) : (
-                                    <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
-                                )}
-                            </div>
-                            <div className="pt-6 border-t border-slate-50 flex items-center gap-3 mt-auto">
-                                <button
-                                    onClick={(e) => { handleMoveToTrash(e, focusedTweet.id); setFocusedTweet(null); }}
-                                    className="w-12 h-12 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95"
-                                    title="Move to Trash"
-                                >
-                                    <i className="fa-solid fa-trash-can"></i>
-                                </button>
-                                <a href={focusedTweet.url} target="_blank" className="flex-1 flex items-center justify-center gap-2 bg-black text-white px-5 py-3.5 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">
-                                    OPEN ON X <i className="fa-solid fa-external-link"></i>
-                                </a>
+                                    ) : (
+                                        <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></span> #{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
+                                    )}
+                                </div>
+                                <div className="pt-6 border-t border-slate-50 flex items-center gap-3 mt-auto">
+                                    <button
+                                        onClick={(e) => { handleMoveToTrash(e, focusedTweet.id); setFocusedTweet(null); }}
+                                        className="w-12 h-12 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95"
+                                        title="Move to Trash"
+                                    >
+                                        <i className="fa-solid fa-trash-can"></i>
+                                    </button>
+                                    <a href={focusedTweet.url} target="_blank" className="flex-1 flex items-center justify-center gap-2 bg-black text-white px-5 py-3.5 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">
+                                        OPEN ON X <i className="fa-solid fa-external-link"></i>
+                                    </a>
+                                </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* TAG MODAL */}
-            {isTagModalOpen && (
-                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
-                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
-                        <form onSubmit={handleSaveTag} className="p-6 space-y-4">
-                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
-                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Pick a Color</label><div className="flex items-center gap-3"><input type="color" value={tagColorInput} onChange={e => setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium text-slate-600 uppercase font-mono">{tagColorInput}</span></div></div>
-                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
-                        </form>
+            {
+                isTagModalOpen && (
+                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <form onSubmit={handleSaveTag} className="p-6 space-y-4">
+                                <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                                <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Pick a Color</label><div className="flex items-center gap-3"><input type="color" value={tagColorInput} onChange={e => setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium text-slate-600 uppercase font-mono">{tagColorInput}</span></div></div>
+                                <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
+                            </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* ADD MODAL */}
-            {isModalOpen && (
-                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter">
-                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
-                        <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
-                            <input type="url" required placeholder="Tweet URL (https://x.com/...)" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" />
-                            <div className="grid grid-cols-2 gap-4">
-                                <CustomDropdown value={newFolder} onChange={setNewFolder} options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]} isMulti={false} />
-                                <CustomDropdown value={newTags} onChange={setNewTags} options={customTags} isMulti={true} />
-                            </div>
-                            <textarea placeholder="Your Note..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none resize-none transition-all" ></textarea>
-                            <button type="submit" className="w-full bg-green-600 text-white py-4 rounded-xl font-bold text-sm shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">Add to Collection</button>
-                        </form>
+            {
+                isModalOpen && (
+                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter">
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
+                                <input type="url" required placeholder="Tweet URL (https://x.com/...)" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <CustomDropdown value={newFolder} onChange={setNewFolder} options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]} isMulti={false} />
+                                    <CustomDropdown value={newTags} onChange={setNewTags} options={customTags} isMulti={true} />
+                                </div>
+                                <textarea placeholder="Your Note..." rows="3" value={newDesc} onChange={e => setNewDesc(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none resize-none transition-all" ></textarea>
+                                <button type="submit" className="w-full bg-green-600 text-white py-4 rounded-xl font-bold text-sm shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">Add to Collection</button>
+                            </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* PREVIEW MODAL */}
-            {previewState && (
-                <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}
-                    onKeyDown={(e) => {
-                        if (e.key === 'ArrowRight' && previewState.medias.length > 1) { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }
-                        if (e.key === 'ArrowLeft' && previewState.medias.length > 1) { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }
-                        if (e.key === 'Escape') setPreviewState(null);
-                    }} tabIndex={0} ref={(el) => el && el.focus()}
-                >
-                    {/* Left Arrow */}
-                    {previewState.medias.length > 1 && (
-                        <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }} className="absolute left-4 sm:left-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-left text-lg"></i></button>
-                    )}
-                    {/* Media */}
-                    {previewState.mediaType === 'video' ? <HlsVideoPlayer src={previewState.medias[previewState.currentIndex]} poster={previewState.poster} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none" onClick={(e) => e.stopPropagation()} /> : <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />}
-                    {/* Right Arrow */}
-                    {previewState.medias.length > 1 && (
-                        <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }} className="absolute right-4 sm:right-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-right text-lg"></i></button>
-                    )}
-                    {/* Counter */}
-                    {previewState.medias.length > 1 && (
-                        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white text-xs font-bold px-4 py-2 rounded-full">{previewState.currentIndex + 1} / {previewState.medias.length}</div>
-                    )}
-                    {/* Top bar buttons */}
-                    <button onClick={(e) => { e.stopPropagation(); handleDownload(getHighResUrl(previewState.medias[previewState.currentIndex])); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-download"></i></button>
-                    <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-xmark text-xl"></i></button>
-                </div>
-            )}
+            {
+                previewState && (
+                    <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[200] flex items-center justify-center p-4 cursor-zoom-out modal-enter" onClick={() => setPreviewState(null)}
+                        onKeyDown={(e) => {
+                            if (e.key === 'ArrowRight' && previewState.medias.length > 1) { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }
+                            if (e.key === 'ArrowLeft' && previewState.medias.length > 1) { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }
+                            if (e.key === 'Escape') setPreviewState(null);
+                        }} tabIndex={0} ref={(el) => el && el.focus()}
+                    >
+                        {/* Left Arrow */}
+                        {previewState.medias.length > 1 && (
+                            <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }} className="absolute left-4 sm:left-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-left text-lg"></i></button>
+                        )}
+                        {/* Media */}
+                        {previewState.mediaType === 'video' ? <HlsVideoPlayer src={previewState.medias[previewState.currentIndex]} poster={previewState.poster} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none" onClick={(e) => e.stopPropagation()} /> : <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />}
+                        {/* Right Arrow */}
+                        {previewState.medias.length > 1 && (
+                            <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }} className="absolute right-4 sm:right-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-right text-lg"></i></button>
+                        )}
+                        {/* Counter */}
+                        {previewState.medias.length > 1 && (
+                            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white text-xs font-bold px-4 py-2 rounded-full">{previewState.currentIndex + 1} / {previewState.medias.length}</div>
+                        )}
+                        {/* Top bar buttons */}
+                        <button onClick={(e) => { e.stopPropagation(); handleDownload(getHighResUrl(previewState.medias[previewState.currentIndex])); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-download"></i></button>
+                        <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-xmark text-xl"></i></button>
+                    </div>
+                )
+            }
 
             {/* FOLDER MODAL */}
-            {isFolderModalOpen && (
-                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                    <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
-                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
-                        <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
-                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
-                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
-                            <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
-                        </form>
+            {
+                isFolderModalOpen && (
+                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
+                        <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
+                                <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
+                                <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
+                                <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
+                            </form>
+                        </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
-            {/* SETTINGS MODAL */}
-            {isSettingsOpen && (
-                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setIsSettingsOpen(false)}>
-                    <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter" onClick={(e) => e.stopPropagation()}>
-                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900 text-lg">Settings</h3><button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
-                        <div className="p-6 space-y-6">
-                            <div>
-                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-3">Accent Color</label>
-                                <div className="flex flex-wrap gap-2 mb-4">
-                                    {['#000000', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#10b981', '#06b6d4'].map(color => (
-                                        <button key={color} onClick={() => setAccentColor(color)} className={`w-9 h-9 rounded-xl transition-all shadow-sm hover:scale-110 ${accentColor === color ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : ''}`} style={{ backgroundColor: color }}></button>
-                                    ))}
+            {
+                isSettingsOpen && (
+                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setIsSettingsOpen(false)}>
+                        <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter" onClick={(e) => e.stopPropagation()}>
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900 text-lg">Settings</h3><button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <div className="p-6 space-y-6">
+                                <div>
+                                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-3">Accent Color</label>
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        {['#000000', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#10b981', '#06b6d4'].map(color => (
+                                            <button key={color} onClick={() => setAccentColor(color)} className={`w-9 h-9 rounded-xl transition-all shadow-sm hover:scale-110 ${accentColor === color ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : ''}`} style={{ backgroundColor: color }}></button>
+                                        ))}
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <input type="color" value={accentColor} onChange={e => setAccentColor(e.target.value)} className="w-10 h-10 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" />
+                                        <input type="text" value={accentColor} onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) setAccentColor(e.target.value); }} onBlur={e => { if (!/^#[0-9a-fA-F]{6}$/i.test(accentColor) && !/^#[0-9a-fA-F]{3}$/i.test(accentColor)) setAccentColor('#000000'); }} className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-sm font-mono uppercase outline-none focus:bg-white transition-all" />
+                                    </div>
                                 </div>
-                                <div className="flex items-center gap-3">
-                                    <input type="color" value={accentColor} onChange={e => setAccentColor(e.target.value)} className="w-10 h-10 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" />
-                                    <input type="text" value={accentColor} onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) setAccentColor(e.target.value); }} onBlur={e => { if (!/^#[0-9a-fA-F]{6}$/i.test(accentColor) && !/^#[0-9a-fA-F]{3}$/i.test(accentColor)) setAccentColor('#000000'); }} className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-sm font-mono uppercase outline-none focus:bg-white transition-all" />
+                                <div className="pt-6 border-t border-slate-50">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Storage Usage (IndexedDB)</label>
+                                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${(storageInfo.used / (1024 * 1024)) < 80 ? 'bg-green-100 text-green-600' : (storageInfo.used / (1024 * 1024)) < 90 ? 'bg-yellow-100 text-yellow-600' : 'bg-red-100 text-red-600'}`}>
+                                            {(storageInfo.used / (1024 * 1024)) < 80 ? 'OPTIMIZED' : (storageInfo.used / (1024 * 1024)) < 90 ? 'HEAVY' : 'CRITICAL'}
+                                        </span>
+                                    </div>
+                                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+                                        <div className="flex justify-between items-end mb-2">
+                                            <span className="text-xs font-bold text-slate-700">Archive Size</span>
+                                            <span className="text-[10px] font-bold text-slate-400">
+                                                {(storageInfo.used / (1024 * 1024)).toFixed(2)} MB / 100 MB
+                                            </span>
+                                        </div>
+                                        <div className="w-full h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                                            <div
+                                                className={`h-full transition-all duration-700 ${(storageInfo.used / (1024 * 1024)) < 80 ? 'bg-green-500' : (storageInfo.used / (1024 * 1024)) < 90 ? 'bg-yellow-500' : 'bg-red-500'}`}
+                                                style={{ width: `${Math.min((storageInfo.used / (1024 * 1024 * 100)) * 100, 100) || 0}%` }}
+                                            ></div>
+                                        </div>
+                                        <p className="mt-3 text-[10px] font-medium text-slate-400 leading-relaxed italic">
+                                            Performance starts to degrade after 100MB due to memory constraints.
+                                        </p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )
+            }
+        </div >
     );
 }
 const root = ReactDOM.createRoot(document.getElementById('root'));
