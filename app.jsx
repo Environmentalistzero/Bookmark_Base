@@ -73,7 +73,27 @@ const TweetEmbed = ({ tweetId }) => {
     return <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center bg-slate-50 rounded-xl" />;
 };
 
-const CustomTweetCard = ({ bookmark, onImageClick }) => {
+const renderFormattedText = (text) => {
+    if (!text) return '';
+    const regex = /(https?:\/\/[^\s]+|#\w+|@\w+)/g;
+    const lines = String(text).split('\n');
+    return lines.map((line, i, arr) => {
+        const parts = line.split(regex);
+        const lineContent = parts.map((part, j) => {
+            if (/^https?:\/\//.test(part)) {
+                return <a key={j} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline break-all" onClick={(e) => e.stopPropagation()}>{part.replace(/^https?:\/\/(www\.)?/, '')}</a>;
+            } else if (part.startsWith('#')) {
+                return <a key={j} href={`https://x.com/hashtag/${part.substring(1)}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={(e) => e.stopPropagation()}>{part}</a>;
+            } else if (part.startsWith('@')) {
+                return <a key={j} href={`https://x.com/${part.substring(1)}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={(e) => e.stopPropagation()}>{part}</a>;
+            }
+            return part;
+        });
+        return <React.Fragment key={i}>{lineContent}{i !== arr.length - 1 && <br />}</React.Fragment>;
+    });
+};
+
+const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
     const handle = bookmark.authorHandle || extractHandle(bookmark.url);
     const name = bookmark.authorName || handle;
     const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
@@ -92,7 +112,9 @@ const CustomTweetCard = ({ bookmark, onImageClick }) => {
                 </div>
                 <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
             </div>
-            <p className="text-slate-800 text-[17px] leading-relaxed whitespace-pre-wrap mb-3 px-1 break-words overflow-hidden" dangerouslySetInnerHTML={{ __html: bookmark.tweetText ? String(bookmark.tweetText).replace(/\n/g, '<br/>') : '' }}></p>
+            <p className="text-slate-800 text-[17px] leading-relaxed whitespace-pre-wrap mb-3 px-1 break-words overflow-hidden">
+                {renderFormattedText(bookmark.tweetText)}
+            </p>
             {medias.length > 0 && (
                 <div className={`rounded-2xl overflow-hidden border border-slate-100 bg-black/5 ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1' : ''}`}>
                     {isVideo ? (
@@ -107,26 +129,23 @@ const CustomTweetCard = ({ bookmark, onImageClick }) => {
             )}
         </div>
     );
-};
+});
+
+/* Dexie Configuration */
+const db = new window.Dexie('TweetmarkDB');
+db.version(1).stores({
+    bookmarks: 'id',
+    folders: 'id',
+    tags: 'id',
+    trash: 'id'
+});
 
 function App() {
-    // --- INITIAL STATE ---
-    const initialData = useMemo(() => {
-        const safeParse = (key) => {
-            try { const d = localStorage.getItem(key); return d ? JSON.parse(d) : []; } catch (e) { return []; }
-        };
-        return {
-            bookmarks: safeParse('tweetBookmarks_v1'),
-            trash: safeParse('tweetTrash_v1'),
-            folders: safeParse('tweetFolders_v2'),
-            tags: safeParse('tweetTags_v1')
-        };
-    }, []);
-
-    const [bookmarks, setBookmarks] = useState(initialData.bookmarks);
-    const [customFolders, setCustomFolders] = useState(initialData.folders);
-    const [customTags, setCustomTags] = useState(initialData.tags);
-    const [trash, setTrash] = useState(initialData.trash);
+    const [bookmarks, setBookmarks] = useState([]);
+    const [customFolders, setCustomFolders] = useState([]);
+    const [customTags, setCustomTags] = useState([]);
+    const [trash, setTrash] = useState([]);
+    const [isDbLoaded, setIsDbLoaded] = useState(false);
     const [activeFolder, setActiveFolder] = useState('All');
     const [searchQuery, setSearchQuery] = useState('');
     const [gridCols, setGridCols] = useState(() => parseInt(localStorage.getItem('tweetGridCols')) || 3);
@@ -139,6 +158,18 @@ function App() {
     const [expandedFolders, setExpandedFolders] = useState([]);
     const [dragOverFolderId, setDragOverFolderId] = useState(null);
     const dragItemRef = useRef(null);
+
+    // Debounce Search 
+    const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+
+    // Infinite Scroll
+    const [visibleCount, setVisibleCount] = useState(20);
+    const observerTarget = useRef(null);
+
+    // Callbacks
+    const handleImageClick = React.useCallback((medias, idx, type, poster) => {
+        setPreviewState({ medias, currentIndex: idx, mediaType: type, poster });
+    }, []);
 
     const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
     const [editingFolder, setEditingFolder] = useState(null);
@@ -161,14 +192,144 @@ function App() {
     const [newTags, setNewTags] = useState('');
     const [newDesc, setNewDesc] = useState('');
 
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [accentColor, setAccentColor] = useState(() => localStorage.getItem('tweetAccentColor') || '#000000');
+
     // --- EFFECTS ---
     useEffect(() => {
-        localStorage.setItem('tweetBookmarks_v1', JSON.stringify(bookmarks));
-        localStorage.setItem('tweetFolders_v2', JSON.stringify(customFolders));
-        localStorage.setItem('tweetTags_v1', JSON.stringify(customTags));
-        localStorage.setItem('tweetTrash_v1', JSON.stringify(trash));
+        const loadDb = async () => {
+            try {
+                const bCount = await db.bookmarks.count();
+                const fCount = await db.folders.count();
+                const tCount = await db.tags.count();
+
+                if (bCount === 0 && fCount === 0 && tCount === 0) {
+                    // Migrate from localStorage
+                    const safeParse = (key) => { try { const d = localStorage.getItem(key); return d ? JSON.parse(d) : []; } catch (e) { return []; } };
+                    const oldB = safeParse('tweetBookmarks_v1');
+                    const oldF = safeParse('tweetFolders_v2');
+                    const oldT = safeParse('tweetTags_v1');
+                    const oldTr = safeParse('tweetTrash_v1');
+
+                    setBookmarks(oldB);
+                    setCustomFolders(oldF);
+                    setCustomTags(oldT);
+                    setTrash(oldTr);
+                } else {
+                    const b = await db.bookmarks.toArray();
+                    const f = await db.folders.toArray();
+                    const t = await db.tags.toArray();
+                    const tr = await db.trash.toArray();
+                    setBookmarks(b);
+                    setCustomFolders(f);
+                    setCustomTags(t);
+                    setTrash(tr);
+                }
+            } catch (err) {
+                console.error("Dexie Load Error", err);
+            } finally {
+                setIsDbLoaded(true);
+            }
+        };
+        loadDb();
+    }, []);
+
+    // --- EXTENSION SYNC EFFECT ---
+    useEffect(() => {
+        const checkPendingSync = () => {
+            if (!isDbLoaded) return;
+            try {
+                // YENİ KAYITLAR İÇİN
+                const pendingStr = localStorage.getItem('pending_twitter_sync');
+                if (pendingStr) {
+                    const pendingBookmarks = JSON.parse(pendingStr);
+                    if (pendingBookmarks && pendingBookmarks.length > 0) {
+                        setBookmarks(prev => {
+                            const existingTweetIds = new Set(prev.map(b => b.tweetId));
+                            const uniquePending = pendingBookmarks.filter(b => !existingTweetIds.has(String(b.tweetId)));
+                            return uniquePending.length > 0 ? [...uniquePending, ...prev] : prev;
+                        });
+                        localStorage.removeItem('pending_twitter_sync');
+                    }
+                }
+
+                // GÜNCELLEMELER İÇİN (Eklenti popup'ından gelen klasör/not/tag vb.)
+                const pendingUpdatesStr = localStorage.getItem('pending_twitter_updates');
+                if (pendingUpdatesStr) {
+                    const updates = JSON.parse(pendingUpdatesStr);
+                    if (updates && updates.length > 0) {
+                        setBookmarks(prev => {
+                            let newPrev = [...prev];
+                            updates.forEach(upd => {
+                                const idx = newPrev.findIndex(b => b.tweetId === String(upd.tweetId));
+                                if (idx !== -1) {
+                                    newPrev[idx] = { ...newPrev[idx], folder: upd.folder, tags: upd.tags, description: upd.note };
+                                }
+                            });
+                            return newPrev;
+                        });
+
+                        const tagsFromUpdates = updates.flatMap(u => (u.tags || []));
+                        if (tagsFromUpdates.length > 0) {
+                            setCustomTags(prevTags => {
+                                const newTagsList = [...prevTags];
+                                let tagsChanged = false;
+                                tagsFromUpdates.forEach(tag => {
+                                    if (tag && !newTagsList.some(t => t.name === tag)) {
+                                        newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: getRandomColor() });
+                                        tagsChanged = true;
+                                    }
+                                });
+                                return tagsChanged ? newTagsList : prevTags;
+                            });
+                        }
+                        localStorage.removeItem('pending_twitter_updates');
+                    }
+                }
+            } catch (err) { console.error("Sync error:", err); }
+        };
+
+        checkPendingSync();
+        window.addEventListener('twitter-bookmarks-synced', checkPendingSync);
+        return () => window.removeEventListener('twitter-bookmarks-synced', checkPendingSync);
+    }, [isDbLoaded]);
+
+    useEffect(() => {
+        if (!isDbLoaded) return;
+        const syncDB = async () => {
+            try {
+                await db.transaction('rw', db.bookmarks, db.folders, db.tags, db.trash, async () => {
+                    await db.bookmarks.clear(); await db.folders.clear(); await db.tags.clear(); await db.trash.clear();
+                    if (bookmarks.length) await db.bookmarks.bulkAdd(bookmarks);
+                    if (customFolders.length) await db.folders.bulkAdd(customFolders);
+                    if (customTags.length) await db.tags.bulkAdd(customTags);
+                    if (trash.length) await db.trash.bulkAdd(trash);
+                });
+            } catch (err) { console.error("Dexie sync error:", err); }
+        };
+        syncDB();
+
         localStorage.setItem('tweetGridCols', gridCols.toString());
-    }, [bookmarks, customFolders, customTags, trash, gridCols]);
+        localStorage.setItem('tweetAccentColor', accentColor);
+    }, [bookmarks, customFolders, customTags, trash, gridCols, accentColor, isDbLoaded]);
+
+    useEffect(() => {
+        const handler = setTimeout(() => { setDebouncedSearchQuery(searchQuery); }, 300);
+        return () => clearTimeout(handler);
+    }, [searchQuery]);
+
+    useEffect(() => {
+        setVisibleCount(20);
+    }, [activeFolder, debouncedSearchQuery, gridCols]);
+
+    useEffect(() => {
+        const observer = new IntersectionObserver(
+            entries => { if (entries[0].isIntersecting) setVisibleCount(prev => prev + 20); },
+            { threshold: 0.1 }
+        );
+        if (observerTarget.current) observer.observe(observerTarget.current);
+        return () => observer.disconnect();
+    }, []);
 
     useEffect(() => {
         if (!window.twttr) {
@@ -206,12 +367,35 @@ function App() {
         reader.onload = (e) => {
             try {
                 const data = JSON.parse(e.target.result);
-                if (data.bookmarks) setBookmarks(data.bookmarks);
-                if (data.customFolders) setCustomFolders(data.customFolders);
-                if (data.customTags) setCustomTags(data.customTags);
-                if (data.trash) setTrash(data.trash);
-                alert("Archive loaded!");
-            } catch (err) { alert("Error loading file."); }
+                let valid = true;
+
+                // Minimal structure validation
+                if (data.bookmarks && !Array.isArray(data.bookmarks)) valid = false;
+                if (data.customFolders && !Array.isArray(data.customFolders)) valid = false;
+                if (data.customTags && !Array.isArray(data.customTags)) valid = false;
+                if (data.trash && !Array.isArray(data.trash)) valid = false;
+
+                // Validate individual bookmark objects minimally (e.g. they should have 'id' and 'tweetId')
+                if (data.bookmarks && valid) {
+                    const hasInvalidBookmark = data.bookmarks.some(b => typeof b !== 'object' || !b.id || !b.tweetId);
+                    if (hasInvalidBookmark) valid = false;
+                }
+
+                if (!valid) {
+                    alert("Tamamen hatalı veya bozuk bir JSON dosyası yüklediniz. İşlem iptal edildi.");
+                    return;
+                }
+
+                if (data.bookmarks && Array.isArray(data.bookmarks)) setBookmarks(data.bookmarks);
+                if (data.customFolders && Array.isArray(data.customFolders)) setCustomFolders(data.customFolders);
+                if (data.customTags && Array.isArray(data.customTags)) setCustomTags(data.customTags);
+                if (data.trash && Array.isArray(data.trash)) setTrash(data.trash);
+
+                alert("Backup başarıyla yüklendi!");
+            } catch (err) {
+                alert("JSON ayrıştırma hatası! Dosyanın bozuk olmadığından emin olun.");
+                console.error("Import JSON Error:", err);
+            }
         };
         reader.readAsText(file);
     };
@@ -248,7 +432,7 @@ function App() {
     };
 
     const handleMoveToTrash = (e, id) => {
-        e.stopPropagation();
+        if (e) e.stopPropagation();
         const item = bookmarks.find(b => b.id === id);
         if (item) {
             setTrash(prev => [{ ...item, deletedAt: Date.now() }, ...prev]);
@@ -261,7 +445,8 @@ function App() {
         e.stopPropagation();
         const item = trash.find(t => t.id === id);
         if (item) {
-            setBookmarks(prev => [item, ...prev]);
+            const { deletedAt, ...rest } = item;
+            setBookmarks(prev => [rest, ...prev]);
             setTrash(prev => prev.filter(t => t.id !== id));
         }
     };
@@ -271,6 +456,11 @@ function App() {
         if (window.confirm("Are you sure you want to permanently delete this?")) {
             setTrash(prev => prev.filter(t => t.id !== id));
         }
+    };
+
+    const handleClearTrash = () => {
+        if (trash.length === 0) return;
+        setTrash([]);
     };
 
     const handleSaveFolder = (e) => {
@@ -352,10 +542,10 @@ function App() {
                 const f = customFolders.find(f => f.name === activeFolder);
                 mF = f ? getFolderAndDescendants(f.id, customFolders).includes(b.folder) : (b.folder === activeFolder);
             }
-            const s = searchQuery.toLowerCase();
+            const s = debouncedSearchQuery.toLowerCase();
             return mF && (!s || (b.tags || []).some(t => t.includes(s)) || (b.description || '').toLowerCase().includes(s) || (b.tweetText || '').toLowerCase().includes(s) || (b.authorName || '').toLowerCase().includes(s));
         });
-    }, [bookmarks, trash, activeFolder, searchQuery, customFolders]);
+    }, [bookmarks, trash, activeFolder, debouncedSearchQuery, customFolders]);
 
     const FolderItem = ({ folder, depth = 0 }) => {
         const children = customFolders.filter(f => f.parentId === folder.id);
@@ -370,9 +560,9 @@ function App() {
                     if (data.type === 'folder') setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: folder.id } : f));
                     else if (data.type === 'tweet') setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
                     dragItemRef.current = null;
-                }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0' }}>
-                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-6 h-6 flex items-center justify-center ${children.length === 0 && 'invisible'}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
-                    <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
+                }} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white' : 'text-slate-600 hover:bg-slate-100'} ${dragOverFolderId === folder.id ? 'bg-blue-50' : ''}`} style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0', ...(isActive ? { backgroundColor: accentColor } : {}) }}>
+                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 && 'invisible'}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
+                    <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 pl-1 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
                     <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
                 </div>
                 {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
@@ -388,20 +578,29 @@ function App() {
         5: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5', padding: 'max-w-[120rem]', cardWidth: 'max-w-full' }
     }[gridCols] || { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl', cardWidth: 'max-w-[420px]' };
 
+    if (!isDbLoaded) {
+        return (
+            <div className="flex h-screen w-full items-center justify-center bg-slate-50 flex-col gap-4">
+                <i className="fa-solid fa-circle-notch fa-spin text-4xl text-slate-300"></i>
+                <p className="font-bold text-slate-500 uppercase tracking-widest text-sm">Loading Database...</p>
+            </div>
+        );
+    }
+
     return (
         <div className="flex h-screen w-full bg-slate-50 text-slate-800 font-sans overflow-hidden">
             <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm hidden sm:flex">
                 <div className="p-6 flex items-center gap-3 border-b border-slate-50">
-                    <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center shadow-md"><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
                     <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
                 </div>
-                <div className="flex-1 overflow-y-auto py-6 px-4 space-y-6 custom-scrollbar">
+                <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
                     <div className="space-y-0.5">
-                        <div onClick={() => setActiveFolder('All')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
+                        <div onClick={() => setActiveFolder('All')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'All' ? { backgroundColor: accentColor } : {}}>
                             <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-layer-group"></i> All Bookmarks</button>
                             <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
                         </div>
-                        <div onClick={() => setActiveFolder('Unsorted')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'bg-black text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`}>
+                        <div onClick={() => setActiveFolder('Unsorted')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'Unsorted' ? { backgroundColor: accentColor } : {}}>
                             <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-inbox"></i> Unsorted</button>
                             <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
                         </div>
@@ -420,7 +619,7 @@ function App() {
                                 {customTags.length > 0 ? customTags.map(tag => {
                                     const isActive = activeFolder === `tag:${tag.name}`;
                                     return (
-                                        <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'bg-black text-white shadow-sm' : 'hover:bg-slate-100'}`}>
+                                        <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white shadow-sm' : 'hover:bg-slate-100'}`} style={isActive ? { backgroundColor: accentColor } : {}}>
                                             <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-3 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="w-2 h-2 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: tag.color }}></span> #{tag.name}</button>
                                             <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{bookmarks.filter(b => (b.tags || []).includes(tag.name)).length}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button></div>
                                         </div>
@@ -430,7 +629,10 @@ function App() {
                         )}
                     </div>
                 </div>
-                <div className="p-4 border-t border-slate-100"><button onClick={() => setActiveFolder('Trash')} className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash <span className="ml-auto text-xs font-bold opacity-60">{trash.length}</span></button></div>
+                <div className="p-4 border-t border-slate-100 flex items-center gap-2">
+                    <button onClick={() => setActiveFolder('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash</button>
+                    <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><i className="fa-solid fa-gear text-sm"></i></button>
+                </div>
             </aside>
 
             <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
@@ -443,14 +645,18 @@ function App() {
                             <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i> {gridCols} Column</button>
                             {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
                         </div>
-                        <button onClick={() => setIsModalOpen(true)} className="bg-black text-white px-5 py-2.5 rounded-full text-xs font-bold hover:bg-slate-800 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-plus mr-2"></i> NEW</button>
+                        {activeFolder === 'Trash' ? (
+                            <button onClick={handleClearTrash} className="text-white bg-red-500 px-5 py-2.5 rounded-full text-xs font-bold hover:bg-red-600 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-trash-can mr-2"></i> CLEAR ALL</button>
+                        ) : (
+                            <button onClick={() => setIsModalOpen(true)} className="text-white px-5 py-2.5 rounded-full text-xs font-bold hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-plus mr-2"></i> NEW</button>
+                        )}
                     </div>
                 </header>
                 <div className="flex-1 overflow-y-auto p-4 sm:p-8 custom-scrollbar">
                     <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-6`}>
-                        {filteredBookmarks.map(b => (
+                        {filteredBookmarks.slice(0, visibleCount).map(b => (
                             <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-6 group flex flex-col bg-white rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-4`}>
-                                <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type, poster })} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
+                                <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
 
                                 <div className="mt-4 space-y-3 pt-3 border-t border-slate-50">
                                     {b.description && <div className="bg-slate-50/50 border-l-2 border-slate-200 p-2.5 rounded-r-xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed italic line-clamp-3 break-words">{b.description}</p></div>}
@@ -476,6 +682,7 @@ function App() {
                             </div>
                         ))}
                     </div></div>
+                    {filteredBookmarks.length > visibleCount && <div ref={observerTarget} className="h-10 w-full" />}
                     {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
                 </div>
             </main>
@@ -593,6 +800,29 @@ function App() {
                             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
                             <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-black text-white py-3.5 rounded-xl font-bold text-xs shadow-lg">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all">DELETE</button>}</div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* SETTINGS MODAL */}
+            {isSettingsOpen && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setIsSettingsOpen(false)}>
+                    <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter" onClick={(e) => e.stopPropagation()}>
+                        <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900 text-lg">Settings</h3><button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                        <div className="p-6 space-y-6">
+                            <div>
+                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-3">Accent Color</label>
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    {['#000000', '#3b82f6', '#8b5cf6', '#ec4899', '#ef4444', '#f97316', '#10b981', '#06b6d4'].map(color => (
+                                        <button key={color} onClick={() => setAccentColor(color)} className={`w-9 h-9 rounded-xl transition-all shadow-sm hover:scale-110 ${accentColor === color ? 'ring-2 ring-offset-2 ring-slate-400 scale-110' : ''}`} style={{ backgroundColor: color }}></button>
+                                    ))}
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <input type="color" value={accentColor} onChange={e => setAccentColor(e.target.value)} className="w-10 h-10 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" />
+                                    <input type="text" value={accentColor} onChange={e => { if (/^#[0-9a-fA-F]{0,6}$/.test(e.target.value)) setAccentColor(e.target.value); }} onBlur={e => { if (!/^#[0-9a-fA-F]{6}$/i.test(accentColor) && !/^#[0-9a-fA-F]{3}$/i.test(accentColor)) setAccentColor('#000000'); }} className="flex-1 px-4 py-2.5 bg-slate-50 border border-slate-100 rounded-xl text-sm font-mono uppercase outline-none focus:bg-white transition-all" />
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}
