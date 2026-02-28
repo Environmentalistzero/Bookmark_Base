@@ -1406,8 +1406,8 @@ function App() {
             {/* TAG MODAL */}
             {
                 isTagModalOpen && (
-                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setIsTagModalOpen(false)}>
+                        <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter" onClick={(e) => e.stopPropagation()}>
                             <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><LucideIcon name="x" className="text-slate-400" /></button></div>
                             <form onSubmit={handleSaveTag} className="p-6 space-y-4">
                                 <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
@@ -1473,8 +1473,8 @@ function App() {
             {/* FOLDER MODAL */}
             {
                 isFolderModalOpen && (
-                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
-                        <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
+                    <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setIsFolderModalOpen(false)}>
+                        <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter" onClick={(e) => e.stopPropagation()}>
                             <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><LucideIcon name="x" className="text-slate-400" /></button></div>
                             <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
                                 <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
