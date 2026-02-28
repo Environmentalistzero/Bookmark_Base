@@ -442,6 +442,7 @@ function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [accentColor, setAccentColor] = useState(() => localStorage.getItem('tweetAccentColor') || '#000000');
     const [theme, setTheme] = useState(() => localStorage.getItem('tweetTheme') || 'light');
+    const [windowWidth, setWindowWidth] = useState(window.innerWidth);
     const [autoBackup, setAutoBackup] = useState(() => localStorage.getItem('tweetAutoBackup') === 'true');
     const [lastBackup, setLastBackup] = useState(() => parseInt(localStorage.getItem('tweetLastBackup')) || 0);
     const [showBrandLines, setShowBrandLines] = useState(() => localStorage.getItem('tweetShowBrandLines') !== 'false');
@@ -993,29 +994,6 @@ function App() {
         });
     }, [bookmarks, trash, activeFolder, debouncedSearchQuery, customFolders]);
 
-    const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-
-    useEffect(() => {
-        const handleResize = () => setWindowWidth(window.innerWidth);
-        window.addEventListener('resize', handleResize);
-        return () => window.removeEventListener('resize', handleResize);
-    }, []);
-
-    const effectiveCols = useMemo(() => {
-        if (windowWidth < 640) return 1;
-        if (windowWidth < 1024) return Math.min(2, gridCols);
-        if (windowWidth < 1280) return Math.min(3, gridCols);
-        if (windowWidth < 1536) return Math.min(4, gridCols);
-        return gridCols;
-    }, [windowWidth, gridCols]);
-
-    const bookmarkColumns = useMemo(() => {
-        const cols = Array.from({ length: effectiveCols }, () => []);
-        filteredBookmarks.slice(0, visibleCount).forEach((b, i) => {
-            cols[i % effectiveCols].push(b);
-        });
-        return cols;
-    }, [filteredBookmarks, visibleCount, effectiveCols]);
 
     // Helper: check if targetId is a descendant of folderId
     const isDescendantOf = (targetId, folderId) => {
@@ -1064,6 +1042,33 @@ function App() {
             </div>
         );
     };
+
+    const [windowWidthState, setWindowWidthState] = useState(window.innerWidth);
+
+    useEffect(() => {
+        const handleResize = () => setWindowWidthState(window.innerWidth);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+    const effectiveCols = useMemo(() => {
+        const w = windowWidthState || window.innerWidth;
+        if (w < 640) return 1;
+        if (w < 1024) return Math.min(2, gridCols || 1);
+        if (w < 1280) return Math.min(3, gridCols || 1);
+        if (w < 1536) return Math.min(4, gridCols || 1);
+        return gridCols || 1;
+    }, [windowWidthState, gridCols]);
+
+    const bookmarkColumns = useMemo(() => {
+        const cols = Array.from({ length: effectiveCols }, () => []);
+        if (filteredBookmarks && Array.isArray(filteredBookmarks)) {
+            filteredBookmarks.slice(0, visibleCount).forEach((b, i) => {
+                cols[i % effectiveCols].push(b);
+            });
+        }
+        return cols;
+    }, [filteredBookmarks, visibleCount, effectiveCols]);
 
     const gridConfig = {
         1: { padding: 'max-w-3xl' },
@@ -1290,12 +1295,12 @@ function App() {
                     ) : (
                         <>
                             <div className={`mx-auto ${gridConfig.padding}`}>
-                                <div className={`grid grid-cols-${effectiveCols} gap-3 sm:gap-6 items-start`}>
+                                <div className="flex gap-3 sm:gap-6 items-start justify-center">
                                     {bookmarkColumns.map((col, colIdx) => (
-                                        <div key={colIdx} className="flex flex-col gap-3 sm:gap-6">
+                                        <div key={colIdx} className="flex-1 flex flex-col gap-3 sm:gap-6 min-w-0">
                                             {col.map(b => (
-                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative mx-auto w-full transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
-                                                    <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
+                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
+                                                    <div className="w-full">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
 
                                                     <div className="mt-4 space-y-3">
                                                         {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
@@ -1634,7 +1639,7 @@ function App() {
                 </div>
             )}
 
-        </div >
+        </div>
     );
 }
 // Initial Render
