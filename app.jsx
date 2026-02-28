@@ -117,12 +117,16 @@ const RedditEmbed = React.memo(({ url }) => {
 
 const renderFormattedText = (text) => {
     if (!text) return '';
-    const regex = /(https?:\/\/[^\s]+|#\w+|@\w+)/g;
+    const regex = /(\[[^\]]+\]\(https?:\/\/[^\s\)]+\)|https?:\/\/[^\s]+|#\w+|@\w+)/g;
     const lines = String(text).split('\n');
     return lines.map((line, i, arr) => {
         const parts = line.split(regex);
         const lineContent = parts.map((part, j) => {
-            if (/^https?:\/\//.test(part)) {
+            if (!part) return part;
+            const mdMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)$/);
+            if (mdMatch) {
+                return <a key={j} href={mdMatch[2]} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline break-all" onClick={(e) => e.stopPropagation()}>{mdMatch[1]}</a>;
+            } else if (/^https?:\/\//.test(part)) {
                 return <a key={j} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline break-all" onClick={(e) => e.stopPropagation()}>{part.replace(/^https?:\/\/(www\.)?/, '')}</a>;
             } else if (part.startsWith('#')) {
                 return <a key={j} href={`https://x.com/hashtag/${part.substring(1)}`} target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline" onClick={(e) => e.stopPropagation()}>{part}</a>;
