@@ -178,11 +178,6 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                         <span className="text-slate-500 text-xs truncate">{handle}</span>
                     </div>
                 </div>
-                {isReddit ? (
-                    <i className="fa-brands fa-reddit text-orange-500 text-lg shrink-0"></i>
-                ) : (
-                    <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
-                )}
             </div>
             <p className="text-slate-800 text-[17px] leading-relaxed whitespace-pre-wrap mb-3 px-1 break-words overflow-hidden">
                 {renderFormattedText(bookmark.tweetText)}
@@ -449,6 +444,16 @@ function App() {
     const [theme, setTheme] = useState(() => localStorage.getItem('tweetTheme') || 'light');
     const [autoBackup, setAutoBackup] = useState(() => localStorage.getItem('tweetAutoBackup') === 'true');
     const [lastBackup, setLastBackup] = useState(() => parseInt(localStorage.getItem('tweetLastBackup')) || 0);
+    const [showBrandLines, setShowBrandLines] = useState(() => localStorage.getItem('tweetShowBrandLines') !== 'false');
+    const [brandLineStyle, setBrandLineStyle] = useState(() => localStorage.getItem('tweetBrandLineStyle') || 'bar');
+
+    useEffect(() => {
+        localStorage.setItem('tweetShowBrandLines', showBrandLines);
+    }, [showBrandLines]);
+
+    useEffect(() => {
+        localStorage.setItem('tweetBrandLineStyle', brandLineStyle);
+    }, [brandLineStyle]);
 
     useEffect(() => {
         localStorage.setItem('tweetTheme', theme);
@@ -762,6 +767,10 @@ function App() {
         });
         if (tagsChanged) setCustomTags(newTagsList);
 
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('tr-TR');
+        const timeStr = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
         const newBtn = {
             id: Date.now().toString(),
             tweetId,
@@ -769,7 +778,8 @@ function App() {
             folder: newFolder.trim() || "General",
             tags: tagsArray,
             description: newDesc.trim(),
-            date: new Date().toLocaleDateString('en-US')
+            date: `${dateStr} ${timeStr}`,
+            timestamp: now.getTime()
         };
 
         setBookmarks([newBtn, ...bookmarks]);
@@ -975,10 +985,10 @@ function App() {
             const s = debouncedSearchQuery.toLowerCase();
             return mF && (!s || (b.tags || []).some(t => t.includes(s)) || (b.description || '').toLowerCase().includes(s) || (b.tweetText || '').toLowerCase().includes(s) || (b.authorName || '').toLowerCase().includes(s));
         });
-        // Sort newest first by id (which is Date.now timestamp)
+        // Sort newest first by timestamp or id
         return filtered.sort((a, b) => {
-            const aTime = parseInt(a.id) || 0;
-            const bTime = parseInt(b.id) || 0;
+            const aTime = a.timestamp || parseInt(a.id) || 0;
+            const bTime = b.timestamp || parseInt(b.id) || 0;
             return bTime - aTime;
         });
     }, [bookmarks, trash, activeFolder, debouncedSearchQuery, customFolders]);
@@ -1032,12 +1042,12 @@ function App() {
     };
 
     const gridConfig = {
-        1: { cols: 'columns-1', padding: 'max-w-3xl', cardWidth: 'max-w-2xl' },
-        2: { cols: 'columns-1 md:columns-2', padding: 'max-w-5xl', cardWidth: 'max-w-lg' },
-        3: { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl', cardWidth: 'max-w-[420px]' },
-        4: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4', padding: 'max-w-[90rem]', cardWidth: 'max-w-full' },
-        5: { cols: 'columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5', padding: 'max-w-[120rem]', cardWidth: 'max-w-full' }
-    }[gridCols] || { cols: 'columns-1 sm:columns-2 lg:columns-3', padding: 'max-w-6xl', cardWidth: 'max-w-[420px]' };
+        1: { cols: 'grid grid-cols-1', padding: 'max-w-3xl', cardWidth: 'max-w-full' },
+        2: { cols: 'grid grid-cols-1 md:grid-cols-2', padding: 'max-w-5xl', cardWidth: 'max-w-full' },
+        3: { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3', padding: 'max-w-6xl', cardWidth: 'max-w-full' },
+        4: { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4', padding: 'max-w-[90rem]', cardWidth: 'max-w-full' },
+        5: { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5', padding: 'max-w-[120rem]', cardWidth: 'max-w-full' }
+    }[gridCols] || { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3', padding: 'max-w-6xl', cardWidth: 'max-w-full' };
 
     if (!isDbLoaded) {
         return (
@@ -1257,7 +1267,7 @@ function App() {
                         <>
                             <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-3 sm:gap-6`}>
                                 {filteredBookmarks.slice(0, visibleCount).map(b => (
-                                    <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-3 sm:mb-6 group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
+                                    <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`mb-3 sm:mb-6 group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
                                         <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
 
                                         <div className="mt-4 space-y-3">
@@ -1281,6 +1291,9 @@ function App() {
                                                 </div>
                                             </div>
                                         </div>
+                                        {showBrandLines && brandLineStyle === 'bar' && (
+                                            <div className="absolute bottom-0 left-0 right-0 h-[6px]" style={{ backgroundColor: b.url && b.url.includes('reddit.com') ? '#ff4500' : '#1da1f2' }}></div>
+                                        )}
                                     </div>
                                 ))}
                             </div></div>
@@ -1510,6 +1523,30 @@ function App() {
                                 </div>
 
                                 <div className="pt-6 border-t border-slate-50 font-sans">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Marka Çizgisi Ekleme</label>
+                                        <button onClick={() => setShowBrandLines(!showBrandLines)} className={`w-10 h-5 rounded-full transition-all relative ${showBrandLines ? 'bg-blue-500' : 'bg-slate-200'}`}><div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${showBrandLines ? 'right-1' : 'left-1'}`}></div></button>
+                                    </div>
+
+                                    {showBrandLines && (
+                                        <div className="mb-4">
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-2">Çizgi Stili</label>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={() => setBrandLineStyle('bar')}
+                                                    className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-bold transition-all border ${brandLineStyle === 'bar' ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-slate-50 border-slate-100 text-slate-500'}`}
+                                                >
+                                                    Alt Çizgi
+                                                </button>
+                                                <button
+                                                    onClick={() => setBrandLineStyle('border')}
+                                                    className={`flex-1 py-2 px-3 rounded-xl text-[11px] font-bold transition-all border ${brandLineStyle === 'border' ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-slate-50 border-slate-100 text-slate-500'}`}
+                                                >
+                                                    Kenarlık
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
                                     <div className="flex items-center justify-between mb-2">
                                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Automatic Backup</label>
                                         <div
