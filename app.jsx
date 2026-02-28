@@ -375,12 +375,33 @@ db.version(1).stores({
     trash: 'id'
 });
 
+/* Firebase Configuration */
+const firebaseConfig = {
+    apiKey: "AIzaSyDustCH0f1DYc8kkFG3qLMRrIooVp7s8Sw",
+    authDomain: "bookmark-base.firebaseapp.com",
+    projectId: "bookmark-base",
+    storageBucket: "bookmark-base.firebasestorage.app",
+    messagingSenderId: "760543001497",
+    appId: "1:760543001497:web:e1914fb0ef9b03b52d7108"
+};
+
+// Initialize Firebase
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
+const auth = firebase.auth();
+const fdb = firebase.firestore();
+
+
 function App() {
     const [bookmarks, setBookmarks] = useState([]);
     const [customFolders, setCustomFolders] = useState([]);
     const [customTags, setCustomTags] = useState([]);
     const [trash, setTrash] = useState([]);
+    const [user, setUser] = useState(null);
     const [isDbLoaded, setIsDbLoaded] = useState(false);
+    const [isSyncing, setIsSyncing] = useState(false);
+
     const [activeFolder, setActiveFolder] = useState('All');
     const [searchQuery, setSearchQuery] = useState('');
     const [gridCols, setGridCols] = useState(() => parseInt(localStorage.getItem('tweetGridCols')) || 3);
@@ -403,6 +424,72 @@ function App() {
             });
         }
     }, [bookmarks, trash]);
+
+    // Handle Auth Changes
+    useEffect(() => {
+        const unsubscribe = auth.onAuthStateChanged(u => {
+            setUser(u);
+            if (u) {
+                loadFromFirestore(u.uid);
+            }
+        });
+        return () => unsubscribe();
+    }, []);
+
+    const handleLogin = async () => {
+        const provider = new firebase.auth.GoogleAuthProvider();
+        try {
+            await auth.signInWithPopup(provider);
+            showToast("Logged in successfully!", "success");
+        } catch (error) {
+            console.error("Login Error:", error);
+            showToast("Login failed. Check browser popup settings.", "error");
+        }
+    };
+
+    const handleLogout = () => {
+        auth.signOut();
+        showToast("Logged out.", "info");
+    };
+
+    const loadFromFirestore = async (uid) => {
+        setIsSyncing(true);
+        try {
+            const doc = await fdb.collection('users').doc(uid).get();
+            if (doc.exists) {
+                const data = doc.data();
+                if (data.bookmarks) setBookmarks(data.bookmarks);
+                if (data.folders) setCustomFolders(data.folders);
+                if (data.tags) setCustomTags(data.tags);
+                if (data.trash) setTrash(data.trash);
+                showToast("Cloud sync complete!", "success");
+            } else {
+                // First time user, sync local to cloud
+                await saveToFirestore(uid);
+            }
+        } catch (err) {
+            console.error("Cloud Load Error:", err);
+            showToast("Cloud load failed.", "error");
+        } finally {
+            setIsSyncing(false);
+        }
+    };
+
+    const saveToFirestore = async (uid) => {
+        if (!uid) return;
+        try {
+            await fdb.collection('users').doc(uid).set({
+                bookmarks,
+                folders: customFolders,
+                tags: customTags,
+                trash,
+                lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+            });
+        } catch (err) {
+            console.error("Cloud Sync Error:", err);
+        }
+    };
+
     const [dragOverFolderId, setDragOverFolderId] = useState(null);
     const dragItemRef = useRef(null);
 
@@ -636,6 +723,12 @@ function App() {
                         await doIncrementalSync(db.tags, customTags);
                         await doIncrementalSync(db.trash, trash);
                     });
+
+                    // Offline sync logic
+                    if (user) {
+                        saveToFirestore(user.uid);
+                    }
+
                     window.dispatchEvent(new CustomEvent('tweetmark-data-changed'));
                 } catch (err) { console.error("Dexie sync error:", err); }
             };
@@ -643,7 +736,7 @@ function App() {
         }, 1500); // 1.5 sn debounce
 
         return () => clearTimeout(handler);
-    }, [bookmarks, customFolders, customTags, trash, isDbLoaded]);
+    }, [bookmarks, customFolders, customTags, trash, isDbLoaded, user]);
 
     useEffect(() => {
         localStorage.setItem('tweetGridCols', gridCols.toString());
@@ -1145,9 +1238,30 @@ function App() {
                                 )}
                             </div>
                         </div>
-                        <div className="p-4 border-t border-slate-100 flex gap-2">
-                            <button onClick={() => { setActiveFolder('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFolder === 'Trash' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
-                            <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-xl"><LucideIcon name="settings" size={18} /></button>
+                        <div className="p-4 border-t border-slate-100 space-y-3">
+                            {/* Cloud Sync Status - Mobile */}
+                            <div className={`p-3 rounded-2xl border transition-all ${user ? 'bg-blue-50/50 border-blue-100' : 'bg-slate-50 border-slate-100'}`}>
+                                {user ? (
+                                    <div className="flex items-center gap-3">
+                                        <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full border border-white shadow-sm" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="text-[13px] font-bold text-slate-800 truncate">{user.displayName || 'User'}</p>
+                                            <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest leading-none">{isSyncing ? 'Syncing...' : 'Online'}</p>
+                                        </div>
+                                        <button onClick={handleLogout} className="text-slate-400 hover:text-red-500 transition-colors" title="Logout">
+                                            <LucideIcon name="log-out" size={14} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 py-2 text-[13px] font-bold text-blue-600 hover:text-blue-700 transition-colors">
+                                        <LucideIcon name="cloud" size={16} /> Cloud Login
+                                    </button>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => { setActiveFolder('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFolder === 'Trash' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
+                                <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-xl"><LucideIcon name="settings" size={18} /></button>
+                            </div>
                         </div>
                     </aside>
                 </div>
@@ -1216,6 +1330,25 @@ function App() {
                     </div>
                 </div>
                 <div className="p-4 border-t border-slate-100 space-y-3">
+                    {/* Cloud Sync Status - Desktop */}
+                    <div className={`p-3 rounded-2xl border transition-all ${user ? 'bg-blue-50/50 border-blue-100' : 'bg-slate-50 border-slate-100'}`}>
+                        {user ? (
+                            <div className="flex items-center gap-3">
+                                {user.photoURL && <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full border border-white shadow-sm" />}
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-[13px] font-bold text-slate-800 truncate">{user.displayName || 'User'}</p>
+                                    <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest leading-none">{isSyncing ? 'Syncing...' : 'Online'}</p>
+                                </div>
+                                <button onClick={handleLogout} className="text-slate-400 hover:text-red-500 transition-colors" title="Logout">
+                                    <LucideIcon name="log-out" size={14} />
+                                </button>
+                            </div>
+                        ) : (
+                            <button onClick={handleLogin} className="w-full flex items-center justify-center gap-2 py-2 text-[13px] font-bold text-blue-600 hover:text-blue-700 transition-colors">
+                                <LucideIcon name="cloud" size={16} /> Cloud Sync Login
+                            </button>
+                        )}
+                    </div>
                     <div className="flex gap-2">
                         <button onClick={handleExportJSON} className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[12px] font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all">
                             <LucideIcon name="download" className="text-[14px]" /> Save
