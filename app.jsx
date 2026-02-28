@@ -1,5 +1,26 @@
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
+const LucideIcon = ({ name, className = '', style = {}, size, strokeWidth = 2 }) => {
+    const ref = React.useRef(null);
+    React.useEffect(() => {
+        if (ref.current && window.lucide) {
+            ref.current.innerHTML = '';
+            const i = document.createElement('i');
+            i.setAttribute('data-lucide', name);
+            ref.current.appendChild(i);
+            window.lucide.createIcons({
+                root: ref.current,
+                attrs: {
+                    'stroke-width': strokeWidth,
+                    width: size || '1em',
+                    height: size || '1em'
+                }
+            });
+        }
+    }, [name, size, strokeWidth]);
+    return <span ref={ref} className={`inline-flex items-center justify-center ${className}`} style={{ ...style, verticalAlign: 'middle', lineHeight: '1' }} />;
+};
+
 const TAG_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316'];
 const getRandomColor = () => TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.length)];
 
@@ -62,7 +83,7 @@ const handleDownload = async (url) => {
         const blob = await response.blob();
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = 'tweetmark_media';
+        a.download = 'bookmark_base_media';
         a.click();
     } catch (err) { window.open(url, '_blank'); }
 };
@@ -182,7 +203,7 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                         >
                             <video src={medias[0]} className="w-full h-full object-cover opacity-70 pointer-events-none" muted playsInline />
                             <div className="absolute w-12 h-12 bg-white/30 backdrop-blur-sm rounded-full flex items-center justify-center z-10 pointer-events-none">
-                                <i className="fa-solid fa-play text-white text-xl ml-1"></i>
+                                <LucideIcon name="play" className="text-white text-xl ml-1" />
                             </div>
                         </a>
                     ) : (
@@ -309,7 +330,7 @@ const CustomDropdown = ({ value, onChange, options, isMulti }) => {
                             <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: bgColor }}></span>
                             {tag}
                             <button onClick={(e) => handleRemoveTag(e, tag)} className="ml-0.5 text-slate-400 hover:text-red-500 font-bold focus:outline-none">
-                                <i className="fa-solid fa-times text-[11px]"></i>
+                                <LucideIcon name="x" className="text-[11px]" />
                             </button>
                         </span>
                     );
@@ -324,7 +345,7 @@ const CustomDropdown = ({ value, onChange, options, isMulti }) => {
                 />
             </div>
             <div className="tm-dropdown-arrow mr-2">
-                <i className="fa-solid fa-chevron-down text-xs"></i>
+                <LucideIcon name="chevron-down" className="text-xs" />
             </div>
             <div className={`tm-dropdown-menu custom-scrollbar ${isOpen ? 'show' : ''}`}>
                 {(isOpen ? filteredOptions : allOptions).length > 0 ? (isOpen ? filteredOptions : allOptions).map(opt => {
@@ -591,22 +612,37 @@ function App() {
 
     useEffect(() => {
         if (!isDbLoaded) return;
-        const syncDB = async () => {
-            try {
-                await db.transaction('rw', db.bookmarks, db.folders, db.tags, db.trash, async () => {
-                    await db.bookmarks.clear(); await db.folders.clear(); await db.tags.clear(); await db.trash.clear();
-                    if (bookmarks.length) await db.bookmarks.bulkAdd(bookmarks);
-                    if (customFolders.length) await db.folders.bulkAdd(customFolders);
-                    if (customTags.length) await db.tags.bulkAdd(customTags);
-                    if (trash.length) await db.trash.bulkAdd(trash);
-                });
-            } catch (err) { console.error("Dexie sync error:", err); }
-        };
-        syncDB();
+        const handler = setTimeout(() => {
+            const syncDB = async () => {
+                try {
+                    await db.transaction('rw', db.bookmarks, db.folders, db.tags, db.trash, async () => {
+                        const doIncrementalSync = async (table, items) => {
+                            const existingIds = new Set(await table.toCollection().primaryKeys());
+                            const currentIds = new Set(items.map(item => item.id));
 
+                            const toDelete = [...existingIds].filter(id => !currentIds.has(id));
+                            if (toDelete.length) await table.bulkDelete(toDelete);
+                            if (items.length) await table.bulkPut(items);
+                        };
+
+                        await doIncrementalSync(db.bookmarks, bookmarks);
+                        await doIncrementalSync(db.folders, customFolders);
+                        await doIncrementalSync(db.tags, customTags);
+                        await doIncrementalSync(db.trash, trash);
+                    });
+                    window.dispatchEvent(new CustomEvent('tweetmark-data-changed'));
+                } catch (err) { console.error("Dexie sync error:", err); }
+            };
+            syncDB();
+        }, 1500); // 1.5 sn debounce
+
+        return () => clearTimeout(handler);
+    }, [bookmarks, customFolders, customTags, trash, isDbLoaded]);
+
+    useEffect(() => {
         localStorage.setItem('tweetGridCols', gridCols.toString());
         localStorage.setItem('tweetAccentColor', accentColor);
-    }, [bookmarks, customFolders, customTags, trash, gridCols, accentColor, isDbLoaded]);
+    }, [gridCols, accentColor]);
 
     useEffect(() => {
         const handler = setTimeout(() => { setDebouncedSearchQuery(searchQuery); }, 300);
@@ -661,7 +697,7 @@ function App() {
             const a = document.createElement('a');
             a.href = url;
             const dateStr = new Date().toLocaleDateString().replace(/\//g, '-');
-            a.download = isAuto ? `tweetmark_auto_backup_${dateStr}.json` : `tweetmark_manual_backup_${dateStr}.json`;
+            a.download = isAuto ? `bookmark_base_auto_backup_${dateStr}.json` : `bookmark_base_manual_backup_${dateStr}.json`;
             a.click();
             setTimeout(() => URL.revokeObjectURL(url), 100);
         } catch (err) {
@@ -799,8 +835,13 @@ function App() {
         e.preventDefault();
         const name = folderNameInput.trim();
         if (!name) return;
+        if (!editingFolder && customFolders.some(f => f.name.toLowerCase() === name.toLowerCase())) {
+            showToast('Folder already exists!', 'error');
+            return;
+        }
         if (editingFolder) {
             setCustomFolders(customFolders.map(f => f.id === editingFolder.id ? { ...f, name, color: folderColorInput } : f));
+            setBookmarks(bookmarks.map(b => b.folder === editingFolder.name ? { ...b, folder: name } : b));
         } else {
             setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name, color: folderColorInput, parentId: null, isPinned: false }]);
         }
@@ -812,11 +853,15 @@ function App() {
         e.preventDefault();
         const name = tagNameInput.trim().toLowerCase();
         if (!name) return;
+        if (!editingTag && customTags.some(t => t.name.toLowerCase() === name.toLowerCase())) {
+            showToast('Tag already exists!', 'error');
+            return;
+        }
         if (editingTag) {
             setCustomTags(customTags.map(t => t.id === editingTag.id ? { ...t, name, color: tagColorInput } : t));
             setBookmarks(bookmarks.map(b => ({
                 ...b,
-                tags: b.tags.map(tag => tag === editingTag.name ? name : tag)
+                tags: (b.tags || []).map(tag => tag === editingTag.name ? name : tag)
             })));
         } else {
             setCustomTags([...customTags, { id: 't_' + Date.now(), name: name, color: tagColorInput }]);
@@ -859,7 +904,59 @@ function App() {
     };
 
     const topLevelFolders = useMemo(() => customFolders.filter(f => !f.parentId), [customFolders]);
-    const getCumulativeCount = (fId) => bookmarks.filter(b => getFolderAndDescendants(fId, customFolders).includes(b.folder)).length;
+
+    const folderCounts = useMemo(() => {
+        const directCounts = {};
+        bookmarks.forEach(b => {
+            const fName = b.folder || 'General';
+            directCounts[fName] = (directCounts[fName] || 0) + 1;
+        });
+
+        const childrenMap = {};
+        const folderById = {};
+        customFolders.forEach(f => {
+            folderById[f.id] = f;
+            childrenMap[f.id] = [];
+        });
+
+        customFolders.forEach(f => {
+            if (f.parentId && childrenMap[f.parentId]) {
+                childrenMap[f.parentId].push(f.id);
+            }
+        });
+
+        const counts = {};
+        const getCount = (fId) => {
+            if (counts[fId] !== undefined) return counts[fId];
+            const folder = folderById[fId];
+            if (!folder) return 0;
+            let total = directCounts[folder.name] || 0;
+            if (childrenMap[fId]) {
+                childrenMap[fId].forEach(childId => {
+                    total += getCount(childId);
+                });
+            }
+            counts[fId] = total;
+            return total;
+        };
+
+        customFolders.forEach(f => {
+            counts[f.id] = getCount(f.id);
+        });
+        return counts;
+    }, [bookmarks, customFolders]);
+
+    const tagCounts = useMemo(() => {
+        const ObjectCounts = {};
+        bookmarks.forEach(b => {
+            (b.tags || []).forEach(t => {
+                ObjectCounts[t] = (ObjectCounts[t] || 0) + 1;
+            });
+        });
+        return ObjectCounts;
+    }, [bookmarks]);
+
+    const getCumulativeCount = (fId) => folderCounts[fId] || 0;
     const unsortedCount = useMemo(() => bookmarks.filter(b => !b.folder || b.folder === 'General' || b.folder === 'Genel').length, [bookmarks]);
 
     const filteredBookmarks = useMemo(() => {
@@ -925,9 +1022,9 @@ function App() {
                     className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white' : 'text-slate-600 hover:bg-slate-100'} ${isDragOver ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
                     style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0', ...(isActive && !isDragOver ? { backgroundColor: accentColor } : {}) }}
                 >
-                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><i className={`fa-solid fa-chevron-${isExpanded ? 'down' : 'right'} text-[9px]`}></i></button>
-                    <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 pl-1 text-left"><i className="fa-solid fa-folder text-[14px]" style={{ color: isActive ? '#fff' : folder.color }}></i> <span>{folder.name}</span></button>
-                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[10px]"></i></button></div>
+                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><LucideIcon name={isExpanded ? "chevron-down" : "chevron-right"} size={10} /></button>
+                    <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 pl-1 text-left"><LucideIcon name="folder" className="text-[14px]" style={{ color: isActive ? '#fff' : folder.color }} /> <span>{folder.name}</span></button>
+                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[10px]" /></button></div>
                 </div>
                 {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
             </div>
@@ -945,7 +1042,7 @@ function App() {
     if (!isDbLoaded) {
         return (
             <div className="flex h-screen w-full items-center justify-center bg-slate-50 flex-col gap-4">
-                <i className="fa-solid fa-circle-notch fa-spin text-4xl text-slate-300"></i>
+                <LucideIcon name="loader" className="fa-spin text-4xl text-slate-300" />
                 <p className="font-bold text-slate-500 uppercase tracking-widest text-sm">Loading Database...</p>
             </div>
         );
@@ -960,46 +1057,48 @@ function App() {
                     <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
                     <aside className="relative w-72 h-full bg-white shadow-2xl flex flex-col animate-slide-in-left">
                         <div className="p-5 flex items-center justify-between border-b border-slate-50">
-                            <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
-                                <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
+                            <div className="flex items-center gap-[5px]">
+                                <LucideIcon name="bookmark" className="shrink-0 -translate-y-[1px]" style={{ color: theme === 'dark' ? '#fff' : '#000' }} size={45} strokeWidth={2.5} />
+                                <div className="flex flex-col items-start">
+                                    <h1 className="text-[28px] tracking-wide leading-[0.85] mb-1 whitespace-nowrap" style={{ fontFamily: '"Londrina Solid", sans-serif', fontWeight: 900, letterSpacing: '0.5px' }}>Bookmark Base</h1>
+                                    <span className="text-[15px] text-slate-500 leading-none" style={{ fontFamily: '"Londrina Solid", sans-serif', fontWeight: 400, letterSpacing: '0.2px' }}>Save Your Feed</span>
+                                </div>
                             </div>
-                            <button onClick={() => setIsSidebarOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full"><i className="fa-solid fa-times text-slate-400"></i></button>
+                            <button onClick={() => setIsSidebarOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full"><LucideIcon name="x" className="text-slate-400" /></button>
                         </div>
                         <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
                             <div className="space-y-0.5">
                                 <div onClick={() => { setActiveFolder('All'); setIsSidebarOpen(false); }} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'All' ? { backgroundColor: accentColor } : {}}>
-                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-layer-group"></i> All Bookmarks</button>
+                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
                                     <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
                                 </div>
                                 <div onClick={() => { setActiveFolder('Unsorted'); setIsSidebarOpen(false); }} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'Unsorted' ? { backgroundColor: accentColor } : {}}>
-                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-inbox"></i> Unsorted</button>
+                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
                                     <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
                                 </div>
                             </div>
                             <div>
-                                <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2><button onClick={(e) => { e.stopPropagation(); setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button></div>
+                                <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2><button onClick={(e) => { e.stopPropagation(); setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button></div>
                                 <div className="space-y-0.5">
-                                    {customFolders.filter(f => !f.parentId).map(f => renderFolderItem(f, 0, true))}
+                                    {customFolders.filter(f => !f.parentId).map(f => <FolderItem key={f.id} folder={f} />)}
                                 </div>
                             </div>
                             <div>
                                 <div className="group flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
-                                    <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
+                                    <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><LucideIcon name={isTagsExpanded ? "chevron-down" : "chevron-right"} size={10} /> Tags</h2>
                                     <div className="flex items-center gap-1.5">
-                                        <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); setIsSidebarOpen(false); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black transition-all" title="View all tags"><i className="fa-solid fa-eye text-[10px]"></i></button>
-                                        <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                                        <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); setIsSidebarOpen(false); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black transition-all" title="View all tags"><LucideIcon name="eye" className="text-[10px]" /></button>
+                                        <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button>
                                     </div>
                                 </div>
                                 {isTagsExpanded && (
                                     <div className="space-y-0.5">
                                         {customTags.map(tag => {
-                                            const tagCount = bookmarks.filter(b => (b.tags || []).includes(tag.name)).length;
                                             return (
                                                 <div key={tag.id} onClick={() => { setActiveFolder(`tag:${tag.name}`); setIsSidebarOpen(false); }} className={`flex items-center cursor-pointer rounded-xl transition-all px-3 py-2 ${activeFolder === `tag:${tag.name}` ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>
                                                     <span className="font-black mr-1.5" style={{ color: tag.color }}>#</span>
                                                     <span className="text-[14px] font-medium">{tag.name}</span>
-                                                    <span className="ml-auto text-[11px] font-bold opacity-50">{tagCount}</span>
+                                                    <span className="ml-auto text-[11px] font-bold opacity-50">{tagCounts[tag.name] || 0}</span>
                                                 </div>
                                             );
                                         })}
@@ -1008,26 +1107,29 @@ function App() {
                             </div>
                         </div>
                         <div className="p-4 border-t border-slate-100 flex gap-2">
-                            <button onClick={() => { setActiveFolder('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFolder === 'Trash' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><i className="fa-solid fa-trash"></i> Trash</button>
-                            <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-xl"><i className="fa-solid fa-gear"></i></button>
+                            <button onClick={() => { setActiveFolder('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFolder === 'Trash' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
+                            <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-xl"><LucideIcon name="settings" size={18} /></button>
                         </div>
                     </aside>
                 </div>
             )}
 
             <aside className="w-72 bg-white border-r border-slate-200 flex flex-col shrink-0 shadow-sm hidden sm:flex">
-                <div className="p-6 flex items-center gap-3 border-b border-slate-50">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center shadow-md" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-bookmark text-white text-sm"></i></div>
-                    <h1 className="text-xl font-bold tracking-tight">Tweetmark</h1>
+                <div className="p-6 flex items-center gap-[5px] border-b border-slate-50">
+                    <LucideIcon name="bookmark" className="shrink-0 -translate-y-[1px]" style={{ color: theme === 'dark' ? '#fff' : '#000' }} size={45} strokeWidth={2.5} />
+                    <div className="flex flex-col items-start">
+                        <h1 className="text-[28px] tracking-wide leading-[0.85] mb-1 whitespace-nowrap" style={{ fontFamily: '"Londrina Solid", sans-serif', fontWeight: 900, letterSpacing: '0.5px' }}>Bookmark Base</h1>
+                        <span className="text-[15px] text-slate-500 leading-none" style={{ fontFamily: '"Londrina Solid", sans-serif', fontWeight: 400, letterSpacing: '0.2px' }}>Save Your Feed</span>
+                    </div>
                 </div>
                 <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
                     <div className="space-y-0.5">
                         <div onClick={() => setActiveFolder('All')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'All' ? { backgroundColor: accentColor } : {}}>
-                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-layer-group"></i> All Bookmarks</button>
+                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
                             <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
                         </div>
                         <div onClick={() => setActiveFolder('Unsorted')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'Unsorted' ? { backgroundColor: accentColor } : {}}>
-                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><i className="fa-solid fa-inbox"></i> Unsorted</button>
+                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
                             <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
                         </div>
                     </div>
@@ -1047,16 +1149,16 @@ function App() {
                             }}
                         >
                             <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2>
-                            <button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                            <button onClick={() => { setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button>
                         </div>
                         <div className="space-y-0">{topLevelFolders.map(f => <FolderItem key={f.id} folder={f} />)}</div>
                     </div>
                     <div>
                         <div className="group flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
-                            <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><i className={`fa-solid fa-chevron-${isTagsExpanded ? 'down' : 'right'} text-[9px]`}></i> Tags</h2>
+                            <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><LucideIcon name={isTagsExpanded ? "chevron-down" : "chevron-right"} size={10} /> Tags</h2>
                             <div className="flex items-center gap-1.5">
-                                <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black opacity-0 group-hover:opacity-100 transition-all" title="View all tags"><i className="fa-solid fa-eye text-[10px]"></i></button>
-                                <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><i className="fa-solid fa-plus text-[10px]"></i></button>
+                                <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black opacity-0 group-hover:opacity-100 transition-all" title="View all tags"><LucideIcon name="eye" className="text-[10px]" /></button>
+                                <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button>
                             </div>
                         </div>
                         {isTagsExpanded && (
@@ -1066,7 +1168,7 @@ function App() {
                                     return (
                                         <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white shadow-sm' : 'hover:bg-slate-100'}`} style={isActive ? { backgroundColor: accentColor } : {}}>
                                             <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-2 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="font-black text-[13px] shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span> {tag.name}</button>
-                                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{bookmarks.filter(b => (b.tags || []).includes(tag.name)).length}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><i className="fa-solid fa-pen text-[9px]"></i></button></div>
+                                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{tagCounts[tag.name] || 0}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[9px]" /></button></div>
                                         </div>
                                     );
                                 }) : <div className="px-3 py-2 text-[11px] text-slate-400 italic">No tags yet</div>}
@@ -1077,16 +1179,16 @@ function App() {
                 <div className="p-4 border-t border-slate-100 space-y-3">
                     <div className="flex gap-2">
                         <button onClick={handleExportJSON} className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[12px] font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all">
-                            <i className="fa-solid fa-download text-[14px]"></i> Save
+                            <LucideIcon name="download" className="text-[14px]" /> Save
                         </button>
                         <label className="flex-1 flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[12px] font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 transition-all cursor-pointer">
-                            <i className="fa-solid fa-upload text-[14px]"></i> Load
+                            <LucideIcon name="upload" className="text-[14px]" /> Load
                             <input type="file" accept=".json" className="hidden" onChange={handleImportJSON} />
                         </label>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setActiveFolder('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><i className="fa-solid fa-trash-can"></i> Trash</button>
-                        <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><i className="fa-solid fa-gear text-sm"></i></button>
+                        <button onClick={() => setActiveFolder('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
+                        <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><LucideIcon name="settings" size={18} className="text-sm" /></button>
                     </div>
                 </div>
             </aside>
@@ -1094,23 +1196,23 @@ function App() {
             <main className="flex-1 flex flex-col h-screen min-w-0 bg-slate-50/50">
                 <header className="h-16 sm:h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sm:px-8 z-40 shrink-0">
                     <div className="flex items-center gap-2 sm:gap-4 min-w-0">
-                        <button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg shrink-0" onClick={() => setIsSidebarOpen(true)}><i className="fa-solid fa-bars-staggered"></i></button>
+                        <button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg shrink-0" onClick={() => setIsSidebarOpen(true)}><LucideIcon name="menu" /></button>
                         <h2 className="text-base sm:text-lg font-bold text-slate-900 capitalize truncate">{activeFolder === 'AllTags' ? 'All Tags' : activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2>
                     </div>
                     <div className="flex items-center gap-2 sm:gap-4">
                         <div className="relative hidden md:block">
-                            <i className="fa-solid fa-search absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                            <LucideIcon name="search" className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={14} />
                             <input type="text" placeholder="Search..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-11 pr-4 py-2.5 bg-slate-100 border-transparent rounded-full text-sm w-48 focus:w-80 focus:bg-white focus:border-slate-200 focus:ring-4 focus:ring-slate-50 outline-none transition-all" />
                         </div>
                         <div className="h-8 w-[1px] bg-slate-100 mx-1 hidden md:block"></div>
                         <div className="relative" tabIndex="0" onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setIsGridMenuOpen(false); }}>
-                            <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-3 sm:px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><i className="fa-solid fa-table-columns"></i><span className="hidden sm:inline"> {gridCols} Column</span></button>
+                            <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-3 sm:px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><LucideIcon name="columns" /><span className="hidden sm:inline"> {gridCols} Column</span></button>
                             {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
                         </div>
                         {activeFolder === 'Trash' ? (
-                            <button onClick={handleClearTrash} className="text-white bg-red-500 px-5 py-2.5 rounded-full text-xs font-bold hover:bg-red-600 transition-all shadow-md active:scale-95 flex items-center"><i className="fa-solid fa-trash-can mr-2"></i> CLEAR ALL</button>
+                            <button onClick={handleClearTrash} className="text-white bg-red-500 px-5 py-2.5 rounded-full text-xs font-bold hover:bg-red-600 transition-all shadow-md active:scale-95 flex items-center"><LucideIcon name="trash-2" size={18} className="mr-2" /> CLEAR ALL</button>
                         ) : (
-                            <button onClick={() => setIsModalOpen(true)} className="text-white px-4 sm:px-5 py-2 sm:py-2.5 rounded-full text-xs font-bold hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center" style={{ backgroundColor: accentColor }}><i className="fa-solid fa-plus sm:mr-2"></i><span className="hidden sm:inline"> NEW</span></button>
+                            <button onClick={() => setIsModalOpen(true)} className="text-white px-4 sm:px-5 py-2 sm:py-2.5 rounded-full text-xs font-bold hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center" style={{ backgroundColor: accentColor }}><LucideIcon name="plus" className="sm:mr-2" /><span className="hidden sm:inline"> NEW</span></button>
                         )}
                     </div>
                 </header>
@@ -1119,7 +1221,7 @@ function App() {
                         <div className="mx-auto max-w-4xl">
                             <div className="mb-8">
                                 <div className="flex items-center gap-3 mb-2">
-                                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center"><i className="fa-solid fa-tags text-slate-500"></i></div>
+                                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center"><LucideIcon name="tags" className="text-slate-500" /></div>
                                     <div>
                                         <h3 className="text-xl font-bold text-slate-900">Tag Collection</h3>
                                         <p className="text-sm text-slate-400 font-medium">{customTags.length} tag{customTags.length !== 1 ? 's' : ''} in your archive</p>
@@ -1129,7 +1231,7 @@ function App() {
                             {customTags.length > 0 ? (
                                 <div className="flex flex-wrap gap-3">
                                     {customTags.map(tag => {
-                                        const count = bookmarks.filter(b => (b.tags || []).includes(tag.name)).length;
+                                        const count = tagCounts[tag.name] || 0;
                                         return (
                                             <button
                                                 key={tag.id}
@@ -1145,7 +1247,7 @@ function App() {
                                 </div>
                             ) : (
                                 <div className="flex flex-col items-center justify-center py-20 opacity-30">
-                                    <i className="fa-solid fa-tags text-4xl mb-4"></i>
+                                    <LucideIcon name="tags" className="text-4xl mb-4" />
                                     <p className="text-sm font-bold uppercase tracking-widest">No Tags Yet</p>
                                     <p className="text-xs mt-2">Tags will appear here as you add them to your bookmarks</p>
                                 </div>
@@ -1163,7 +1265,7 @@ function App() {
 
                                             <div className="flex items-center justify-between gap-2">
                                                 <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-                                                    <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><i className="fa-solid fa-folder mr-1.5 text-[9px]" style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }}></i> {b.folder || 'Unsorted'}</span>
+                                                    <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><LucideIcon name="folder" className="mr-1" size={12} style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }} /> {b.folder || 'Unsorted'}</span>
                                                     {(b.tags || []).map(tag => {
                                                         const tO = customTags.find(t => t.name === tag);
                                                         return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="font-black" style={{ color: tO?.color || '#64748b' }}>#</span>{tag}</span>;
@@ -1171,11 +1273,11 @@ function App() {
                                                 </div>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     {activeFolder === 'Trash' ? (
-                                                        <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><i className="fa-solid fa-rotate-left"></i></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><i className="fa-solid fa-trash"></i></button></div>
+                                                        <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><LucideIcon name="rotate-ccw" /></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><LucideIcon name="trash-2" size={18} /></button></div>
                                                     ) : (
-                                                        <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><i className="fa-solid fa-trash-can text-[13px]"></i></button>
+                                                        <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><LucideIcon name="trash-2" size={18} className="text-[13px]" /></button>
                                                     )}
-                                                    <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i></a>
+                                                    <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><LucideIcon name="external-link" size={12} /></a>
                                                 </div>
                                             </div>
                                         </div>
@@ -1183,7 +1285,7 @@ function App() {
                                 ))}
                             </div></div>
                             {filteredBookmarks.length > visibleCount && <div ref={observerTarget} className="h-10 w-full" />}
-                            {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><i className="fa-solid fa-layer-group text-4xl mb-4"></i><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
+                            {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><LucideIcon name="layers" size={18} className="text-4xl mb-4" /><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
                         </>
                     )}
                 </div>
@@ -1203,10 +1305,10 @@ function App() {
                                 <div>
                                     <div className="flex justify-between items-start mb-6">
                                         <div>
-                                            <span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center w-fit"><i className="fa-solid fa-folder mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></i> {focusedTweet.folder || 'Unsorted'}</span>
-                                            {focusedTweet.date && <p className="text-[11px] text-slate-400 font-medium mt-2 ml-1"><i className="fa-regular fa-calendar mr-1.5"></i>{formatDate(focusedTweet.date)}</p>}
+                                            <span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center w-fit"><LucideIcon name="folder" className="mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }} /> {focusedTweet.folder || 'Unsorted'}</span>
+                                            {focusedTweet.date && <p className="text-[11px] text-slate-400 font-medium mt-2 ml-1"><LucideIcon name="calendar" className="mr-1.5" />{formatDate(focusedTweet.date)}</p>}
                                         </div>
-                                        <div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-pen text-sm"></i></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><i className="fa-solid fa-times text-lg"></i></button></div>
+                                        <div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><LucideIcon name="pen" className="text-sm" /></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><LucideIcon name="x" className="text-lg" /></button></div>
                                     </div>
                                     {isEditingFocus ? (
                                         <div className="space-y-4 mb-8">
@@ -1241,10 +1343,10 @@ function App() {
                                         className="w-12 h-12 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95"
                                         title="Move to Trash"
                                     >
-                                        <i className="fa-solid fa-trash-can"></i>
+                                        <LucideIcon name="trash-2" size={18} />
                                     </button>
                                     <a href={focusedTweet.url} target="_blank" className="flex-1 flex items-center justify-center gap-2 bg-black text-white px-5 py-3.5 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">
-                                        OPEN ON X <i className="fa-solid fa-external-link"></i>
+                                        {focusedTweet.url && focusedTweet.url.includes('reddit.com') ? 'OPEN ON REDDIT' : 'OPEN ON X'} <LucideIcon name="external-link" />
                                     </a>
                                 </div>
                             </div>
@@ -1258,11 +1360,11 @@ function App() {
                 isTagModalOpen && (
                     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
                         <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
-                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingTag ? 'Edit Tag' : 'New Tag'}</h3><button onClick={() => setIsTagModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><LucideIcon name="x" className="text-slate-400" /></button></div>
                             <form onSubmit={handleSaveTag} className="p-6 space-y-4">
                                 <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tag Name</label><input type="text" required value={tagNameInput} onChange={e => setTagNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
                                 <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Pick a Color</label><div className="flex items-center gap-3"><input type="color" value={tagColorInput} onChange={e => setTagColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium text-slate-600 uppercase font-mono">{tagColorInput}</span></div></div>
-                                <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
+                                <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingTag && <button type="button" onClick={() => { if (window.confirm("Delete this tag?")) { setCustomTags(prev => prev.filter(t => t.id !== editingTag.id)); setBookmarks(prev => prev.map(b => ({ ...b, tags: (b.tags || []).filter(tag => tag !== editingTag.name) }))); setIsTagModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
                             </form>
                         </div>
                     </div>
@@ -1274,7 +1376,7 @@ function App() {
                 isModalOpen && (
                     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                         <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter">
-                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">Add New Bookmark</h3><button onClick={() => setIsModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><LucideIcon name="x" className="text-slate-400" /></button></div>
                             <form onSubmit={handleAddBookmark} className="p-6 space-y-4">
                                 <input type="url" required placeholder="Tweet URL (https://x.com/...)" value={newUrl} onChange={e => setNewUrl(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" />
                                 <div className="grid grid-cols-2 gap-4">
@@ -1301,21 +1403,21 @@ function App() {
                     >
                         {/* Left Arrow */}
                         {previewState.medias.length > 1 && (
-                            <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }} className="absolute left-4 sm:left-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-left text-lg"></i></button>
+                            <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }} className="absolute left-4 sm:left-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><LucideIcon name="chevron-left" className="text-lg" /></button>
                         )}
                         {/* Media */}
                         {previewState.mediaType === 'video' ? <HlsVideoPlayer src={previewState.medias[previewState.currentIndex]} poster={previewState.poster} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none" onClick={(e) => e.stopPropagation()} /> : <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />}
                         {/* Right Arrow */}
                         {previewState.medias.length > 1 && (
-                            <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }} className="absolute right-4 sm:right-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><i className="fa-solid fa-chevron-right text-lg"></i></button>
+                            <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }} className="absolute right-4 sm:right-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><LucideIcon name="chevron-right" className="text-lg" /></button>
                         )}
                         {/* Counter */}
                         {previewState.medias.length > 1 && (
                             <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur-sm text-white text-xs font-bold px-4 py-2 rounded-full">{previewState.currentIndex + 1} / {previewState.medias.length}</div>
                         )}
                         {/* Top bar buttons */}
-                        <button onClick={(e) => { e.stopPropagation(); handleDownload(getHighResUrl(previewState.medias[previewState.currentIndex])); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-download"></i></button>
-                        <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><i className="fa-solid fa-xmark text-xl"></i></button>
+                        <button onClick={(e) => { e.stopPropagation(); handleDownload(getHighResUrl(previewState.medias[previewState.currentIndex])); }} className="absolute top-6 right-20 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><LucideIcon name="download" /></button>
+                        <button onClick={() => setPreviewState(null)} className="absolute top-6 right-6 w-10 h-10 flex items-center justify-center bg-white/10 hover:bg-white/30 text-white rounded-full transition-colors"><LucideIcon name="x" className="text-xl" /></button>
                     </div>
                 )
             }
@@ -1325,11 +1427,11 @@ function App() {
                 isFolderModalOpen && (
                     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
                         <div className="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl modal-enter">
-                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900">{editingFolder ? 'Edit Folder' : 'New Folder'}</h3><button onClick={() => setIsFolderModalOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><LucideIcon name="x" className="text-slate-400" /></button></div>
                             <form onSubmit={handleSaveFolder} className="p-6 space-y-4">
                                 <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Name</label><input type="text" required value={folderNameInput} onChange={e => setFolderNameInput(e.target.value)} className="w-full px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl text-sm focus:bg-white outline-none transition-all" /></div>
                                 <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Color</label><div className="flex items-center gap-3"><input type="color" value={folderColorInput} onChange={e => setFolderColorInput(e.target.value)} className="w-12 h-12 p-1 bg-slate-50 border border-slate-100 rounded-xl cursor-pointer shadow-sm" /> <span className="text-sm font-medium uppercase">{folderColorInput}</span></div></div>
-                                <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
+                                <div className="flex gap-2 pt-4"><button type="submit" className="flex-1 bg-green-600 text-white py-3.5 rounded-xl font-bold text-xs shadow-md shadow-green-600/20 hover:bg-green-700 transition-all active:scale-95">SAVE</button>{editingFolder && <button type="button" onClick={() => { if (window.confirm("Delete this folder?")) { setCustomFolders(prev => prev.filter(f => f.id !== editingFolder.id)); setBookmarks(prev => prev.map(b => b.folder === editingFolder.name ? { ...b, folder: 'Unsorted' } : b)); setIsFolderModalOpen(false); } }} className="flex-1 bg-red-50 text-red-500 py-3.5 rounded-xl font-bold text-xs hover:bg-red-100 transition-all active:scale-95">DELETE</button>}</div>
                             </form>
                         </div>
                     </div>
@@ -1340,7 +1442,7 @@ function App() {
                 isSettingsOpen && (
                     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[110] flex items-center justify-center p-4" onClick={() => setIsSettingsOpen(false)}>
                         <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl modal-enter" onClick={(e) => e.stopPropagation()}>
-                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900 text-lg">Settings</h3><button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><i className="fa-solid fa-times text-slate-400"></i></button></div>
+                            <div className="p-6 border-b border-gray-50 flex justify-between items-center"><h3 className="font-bold text-slate-900 text-lg">Settings</h3><button onClick={() => setIsSettingsOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all"><LucideIcon name="x" className="text-slate-400" /></button></div>
                             <div className="p-6 space-y-6">
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-3">Accent Color</label>
@@ -1374,7 +1476,7 @@ function App() {
                                                 <span className={`text-[11px] font-bold ${theme === t.id ? 'text-blue-600' : 'text-slate-500'}`}>{t.name}</span>
                                                 {theme === t.id && (
                                                     <div className="absolute top-1 right-1 w-4 h-4 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
-                                                        <i className="fa-solid fa-check text-[8px] text-white"></i>
+                                                        <LucideIcon name="check" className="text-[8px] text-white" />
                                                     </div>
                                                 )}
                                             </button>
@@ -1459,7 +1561,7 @@ function App() {
                             {toast.undoAction && (
                                 <button onClick={() => { toast.undoAction(); dismissToast(toast.id); }} className="text-xs font-bold text-blue-600 hover:text-blue-700 uppercase tracking-wider shrink-0 px-2 py-1 hover:bg-blue-50 rounded-lg transition-all">Undo</button>
                             )}
-                            <button onClick={() => dismissToast(toast.id)} className="text-slate-300 hover:text-slate-500 transition-colors ml-1"><i className="fa-solid fa-times text-xs"></i></button>
+                            <button onClick={() => dismissToast(toast.id)} className="text-slate-300 hover:text-slate-500 transition-colors ml-1"><LucideIcon name="x" className="text-xs" /></button>
                         </div>
                     ))}
                 </div>
