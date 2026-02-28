@@ -30,12 +30,20 @@ const sanitizeUrl = (url) => {
 
 const extractTweetId = (url) => {
     if (!url || typeof url !== 'string') return null;
+    if (url.includes('reddit.com')) {
+        const match = url.match(/comments\/([a-zA-Z0-9]+)/);
+        return match ? match[1] : null;
+    }
     const match = url.match(/status\/(\d+)/);
     return match && /^\d+$/.test(match[1]) ? match[1] : null;
 };
 
 const extractHandle = (url) => {
     if (!url || typeof url !== 'string') return '@user';
+    if (url.includes('reddit.com')) {
+        const match = url.match(/r\/([a-zA-Z0-9_]+)/);
+        return match ? `r/${match[1]}` : 'Reddit User';
+    }
     const match = url.match(/(?:x\.com|twitter\.com)\/([a-zA-Z0-9_]+)/);
     return match ? `@${match[1]}` : '@user';
 };
@@ -87,6 +95,26 @@ const TweetEmbed = ({ tweetId }) => {
     return <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center bg-slate-50 rounded-xl" />;
 };
 
+const RedditEmbed = React.memo(({ url }) => {
+    let embedUrl = '';
+    try {
+        const path = new URL(url).pathname;
+        embedUrl = `https://www.redditmedia.com${path}?ref_source=embed&ref=share&embed=true`;
+    } catch (e) {
+        embedUrl = url;
+    }
+    return (
+        <div className="w-full bg-slate-50 flex justify-center rounded-xl overflow-hidden" style={{ minHeight: '300px' }}>
+            <iframe
+                src={embedUrl}
+                sandbox="allow-scripts allow-same-origin allow-popups"
+                style={{ border: 'none', width: '100%', height: '400px' }}
+                scrolling="yes"
+            />
+        </div>
+    );
+});
+
 const renderFormattedText = (text) => {
     if (!text) return '';
     const regex = /(https?:\/\/[^\s]+|#\w+|@\w+)/g;
@@ -110,9 +138,10 @@ const renderFormattedText = (text) => {
 const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
     const handle = bookmark.authorHandle || extractHandle(bookmark.url);
     const name = bookmark.authorName || handle;
-    const avatar = bookmark.profileImg || 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png';
+    const avatar = bookmark.profileImg || (bookmark.url && bookmark.url.includes('reddit.com') ? 'https://www.redditstatic.com/avatars/defaults/v2/avatar_default_1.png' : 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png');
     const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
     const isVideo = bookmark.mediaType === 'video' || medias.some(m => String(m).match(/\.(mp4|webm|ogg|m3u8)/i));
+    const isReddit = bookmark.url && bookmark.url.includes('reddit.com');
 
     return (
         <div className="text-left w-full">
@@ -124,7 +153,11 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                         <span className="text-slate-500 text-xs truncate">{handle}</span>
                     </div>
                 </div>
-                <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
+                {isReddit ? (
+                    <i className="fa-brands fa-reddit text-orange-500 text-lg shrink-0"></i>
+                ) : (
+                    <i className="fa-brands fa-x-twitter text-slate-300 text-lg shrink-0"></i>
+                )}
             </div>
             <p className="text-slate-800 text-[17px] leading-relaxed whitespace-pre-wrap mb-3 px-1 break-words overflow-hidden">
                 {renderFormattedText(bookmark.tweetText)}
@@ -676,7 +709,7 @@ function App() {
     const handleAddBookmark = (e) => {
         e.preventDefault();
         const tweetId = extractTweetId(newUrl);
-        if (!tweetId) return showToast('Please enter a valid tweet link.', 'error');
+        if (!tweetId) return showToast('Please enter a valid Twitter or Reddit link.', 'error');
 
         const tagsArray = newTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
         const newTagsList = [...customTags];
@@ -1119,7 +1152,7 @@ function App() {
                             <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-3 sm:gap-6`}>
                                 {filteredBookmarks.slice(0, visibleCount).map(b => (
                                     <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`break-inside-avoid mb-3 sm:mb-6 group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border border-slate-200 shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
-                                        <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : <TweetEmbed tweetId={b.tweetId} />}</div>
+                                        <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
 
                                         <div className="mt-4 space-y-3">
                                             {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
@@ -1159,7 +1192,7 @@ function App() {
                         <div className="bg-white w-full max-w-5xl rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
                             <div className="flex-1 bg-slate-100 p-4 sm:p-8 md:p-12 lg:p-16 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[200px] sm:min-h-[400px]">
                                 <div className="w-full max-w-lg bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-5">
-                                    {focusedTweet.tweetText ? <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />}
+                                    {focusedTweet.tweetText ? <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /> : (focusedTweet.url && focusedTweet.url.includes('reddit.com') ? <RedditEmbed url={focusedTweet.url} /> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />)}
                                 </div>
                             </div>
                             <div className="w-full md:w-[350px] p-5 sm:p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
