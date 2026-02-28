@@ -993,6 +993,30 @@ function App() {
         });
     }, [bookmarks, trash, activeFolder, debouncedSearchQuery, customFolders]);
 
+    const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+    useEffect(() => {
+        const handleResize = () => setWindowWidth(window.innerWidth);
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
+
+    const effectiveCols = useMemo(() => {
+        if (windowWidth < 640) return 1;
+        if (windowWidth < 1024) return Math.min(2, gridCols);
+        if (windowWidth < 1280) return Math.min(3, gridCols);
+        if (windowWidth < 1536) return Math.min(4, gridCols);
+        return gridCols;
+    }, [windowWidth, gridCols]);
+
+    const bookmarkColumns = useMemo(() => {
+        const cols = Array.from({ length: effectiveCols }, () => []);
+        filteredBookmarks.slice(0, visibleCount).forEach((b, i) => {
+            cols[i % effectiveCols].push(b);
+        });
+        return cols;
+    }, [filteredBookmarks, visibleCount, effectiveCols]);
+
     // Helper: check if targetId is a descendant of folderId
     const isDescendantOf = (targetId, folderId) => {
         const children = customFolders.filter(f => f.parentId === folderId);
@@ -1042,12 +1066,12 @@ function App() {
     };
 
     const gridConfig = {
-        1: { cols: 'grid grid-cols-1', padding: 'max-w-3xl', cardWidth: 'max-w-full' },
-        2: { cols: 'grid grid-cols-1 md:grid-cols-2', padding: 'max-w-5xl', cardWidth: 'max-w-full' },
-        3: { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3', padding: 'max-w-6xl', cardWidth: 'max-w-full' },
-        4: { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4', padding: 'max-w-[90rem]', cardWidth: 'max-w-full' },
-        5: { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5', padding: 'max-w-[120rem]', cardWidth: 'max-w-full' }
-    }[gridCols] || { cols: 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3', padding: 'max-w-6xl', cardWidth: 'max-w-full' };
+        1: { padding: 'max-w-3xl' },
+        2: { padding: 'max-w-5xl' },
+        3: { padding: 'max-w-6xl' },
+        4: { padding: 'max-w-[90rem]' },
+        5: { padding: 'max-w-[120rem]' }
+    }[gridCols] || { padding: 'max-w-6xl' };
 
     if (!isDbLoaded) {
         return (
@@ -1265,38 +1289,44 @@ function App() {
                         </div>
                     ) : (
                         <>
-                            <div className={`mx-auto ${gridConfig.padding}`}><div className={`${gridConfig.cols} gap-3 sm:gap-6`}>
-                                {filteredBookmarks.slice(0, visibleCount).map(b => (
-                                    <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`mb-3 sm:mb-6 group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative mx-auto w-full ${gridConfig.cardWidth} transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
-                                        <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
+                            <div className={`mx-auto ${gridConfig.padding}`}>
+                                <div className={`grid grid-cols-${effectiveCols} gap-3 sm:gap-6 items-start`}>
+                                    {bookmarkColumns.map((col, colIdx) => (
+                                        <div key={colIdx} className="flex flex-col gap-3 sm:gap-6">
+                                            {col.map(b => (
+                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`group flex flex-col bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative mx-auto w-full transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
+                                                    <div className="flex-1">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
 
-                                        <div className="mt-4 space-y-3">
-                                            {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
+                                                    <div className="mt-4 space-y-3">
+                                                        {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
 
-                                            <div className="flex items-center justify-between gap-2">
-                                                <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-                                                    <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><LucideIcon name="folder" className="mr-1" size={12} style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }} /> {b.folder || 'Unsorted'}</span>
-                                                    {(b.tags || []).map(tag => {
-                                                        const tO = customTags.find(t => t.name === tag);
-                                                        return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="font-black" style={{ color: tO?.color || '#64748b' }}>#</span>{tag}</span>;
-                                                    })}
-                                                </div>
-                                                <div className="flex items-center gap-2 shrink-0">
-                                                    {activeFolder === 'Trash' ? (
-                                                        <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><LucideIcon name="rotate-ccw" /></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><LucideIcon name="trash-2" size={18} /></button></div>
-                                                    ) : (
-                                                        <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><LucideIcon name="trash-2" size={18} className="text-[13px]" /></button>
+                                                        <div className="flex items-center justify-between gap-2">
+                                                            <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
+                                                                <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><LucideIcon name="folder" className="mr-1" size={12} style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }} /> {b.folder || 'Unsorted'}</span>
+                                                                {(b.tags || []).map(tag => {
+                                                                    const tO = customTags.find(t => t.name === tag);
+                                                                    return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="font-black" style={{ color: tO?.color || '#64748b' }}>#</span>{tag}</span>;
+                                                                })}
+                                                            </div>
+                                                            <div className="flex items-center gap-2 shrink-0">
+                                                                {activeFolder === 'Trash' ? (
+                                                                    <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><LucideIcon name="rotate-ccw" /></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><LucideIcon name="trash-2" size={18} /></button></div>
+                                                                ) : (
+                                                                    <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><LucideIcon name="trash-2" size={18} className="text-[13px]" /></button>
+                                                                )}
+                                                                <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><LucideIcon name="external-link" size={12} /></a>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    {showBrandLines && brandLineStyle === 'bar' && (
+                                                        <div className="absolute bottom-0 left-0 right-0 h-[6px]" style={{ backgroundColor: b.url && b.url.includes('reddit.com') ? '#ff4500' : '#1da1f2' }}></div>
                                                     )}
-                                                    <a href={b.url} target="_blank" onClick={(e) => e.stopPropagation()} className="w-7 h-7 flex items-center justify-center bg-white border border-slate-200 shadow-sm text-slate-400 hover:text-black rounded-lg transition-all"><LucideIcon name="external-link" size={12} /></a>
                                                 </div>
-                                            </div>
+                                            ))}
                                         </div>
-                                        {showBrandLines && brandLineStyle === 'bar' && (
-                                            <div className="absolute bottom-0 left-0 right-0 h-[6px]" style={{ backgroundColor: b.url && b.url.includes('reddit.com') ? '#ff4500' : '#1da1f2' }}></div>
-                                        )}
-                                    </div>
-                                ))}
-                            </div></div>
+                                    ))}
+                                </div>
+                            </div>
                             {filteredBookmarks.length > visibleCount && <div ref={observerTarget} className="h-10 w-full" />}
                             {filteredBookmarks.length === 0 && <div className="flex flex-col items-center justify-center py-20 opacity-30"><LucideIcon name="layers" size={18} className="text-4xl mb-4" /><p className="text-sm font-bold uppercase tracking-widest">No Content Found</p></div>}
                         </>
