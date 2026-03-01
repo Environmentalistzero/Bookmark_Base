@@ -444,6 +444,7 @@ function App() {
     const lastLoadedUid = useRef(null);
     const isCloudUpdateActive = useRef(false);
     const saveQueueRef = useRef(Promise.resolve());
+    const prevSyncStateRef = useRef(null);
 
     // Effect to trigger loadFromFirestore ONLY when both user and DB are ready for the first time or when user changes
     useEffect(() => {
@@ -471,45 +472,109 @@ function App() {
         showToast("Logged out.", "info");
     };
 
+
+    const isItemEqual = (a, b) => {
+        if (a === b) return true;
+        if (!a || !b) return false;
+        const keysA = Object.keys(a);
+        const keysB = Object.keys(b);
+        if (keysA.length !== keysB.length) return false;
+        for (let key of keysA) {
+            if (a[key] !== b[key]) {
+                if (Array.isArray(a[key]) && Array.isArray(b[key])) {
+                    if (a[key].length !== b[key].length) return false;
+                    for (let i = 0; i < a[key].length; i++) {
+                        if (a[key][i] !== b[key][i]) return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
+
     const loadFromFirestore = async (uid) => {
-        if (!isDbLoaded) return; // Prevent loading before local DB is ready
+        if (!isDbLoaded) return;
         setIsSyncing(true);
         try {
-            const doc = await fdb.collection('users').doc(uid).get();
-            if (doc.exists) {
-                const data = doc.data();
+            const metaDoc = await fdb.collection('users').doc(uid).collection('meta').doc('state').get();
+            let cloudTime = 0;
+            let isMigrated = false;
+            let forceMigration = false;
+            let oldData = null;
 
-                // Compare timestamps to handle simple conflicts (local vs remote)
-                const cloudTime = data.lastUpdated?.toMillis() || 0;
-                const localTime = parseInt(localStorage.getItem('tweetLastLocalUpdate')) || 0;
-
-                // If cloud is newer OR we have empty local data, take cloud data
-                // We add a 2 second tolerance for equality checks to prevent unnecessary local overrides
-                if (cloudTime > localTime + 2000 || (bookmarks.length === 0 && customFolders.length === 0 && customTags.length === 0)) {
-                    // Set a flag to prevent the sync effect from immediately pushing this back
-                    isCloudUpdateActive.current = true;
-                    setBookmarks(data.bookmarks || []);
-                    setCustomFolders(data.folders || []);
-                    setCustomTags(data.tags || []);
-                    setTrash(data.trash || []);
-
-                    // Only update the local timestamp to precisely match the cloud one
-                    localStorage.setItem('tweetLastLocalUpdate', cloudTime.toString());
-
-                    showToast("Cloud sync complete!", "success");
-
-                    // Reset the flag safely
-                    setTimeout(() => { isCloudUpdateActive.current = false; }, 3500);
-                } else if (localTime > cloudTime + 2000) {
-                    // Local is newer, push to cloud instead
-                    await saveToFirestore(uid, true);
-                }
+            if (metaDoc.exists) {
+                const mData = metaDoc.data();
+                cloudTime = mData.lastUpdated?.toMillis() || 0;
+                isMigrated = mData.schemaVersion >= 2;
             } else {
-                // First time user, sync local to cloud ONLY if we have local data
-                if (bookmarks.length > 0 || customFolders.length > 0 || customTags.length > 0) {
-                    await saveToFirestore(uid, true);
-                    showToast("Initial cloud backup created.", "success");
+                // Determine if we need migration from old doc
+                const oldDoc = await fdb.collection('users').doc(uid).get();
+                if (oldDoc.exists) {
+                    oldData = oldDoc.data();
+                    cloudTime = oldData.lastUpdated?.toMillis() || 0;
+                    forceMigration = true;
                 }
+            }
+
+            const localTime = parseInt(localStorage.getItem('tweetLastLocalUpdate')) || 0;
+
+            if (forceMigration || cloudTime > localTime + 2000 || (bookmarks.length === 0 && customFolders.length === 0 && customTags.length === 0)) {
+                isCloudUpdateActive.current = true;
+
+                let data = { bookmarks: [], folders: [], tags: [], trash: [] };
+
+                if (forceMigration) {
+                    // Execute forced migration inline with deterministic state
+                    showToast("Upgrading data sync. Do not close...", "info");
+
+                    data.bookmarks = oldData.bookmarks || [];
+                    data.folders = oldData.folders || [];
+                    data.tags = oldData.tags || [];
+                    data.trash = oldData.trash || [];
+
+                    prevSyncStateRef.current = null;
+                    await saveToFirestore(uid, true, data);
+                    showToast("Upgraded to new Cloud Sync Architecture.", "success");
+                } else if (isMigrated) {
+                    const [bSnap, fSnap, tSnap, trSnap] = await Promise.all([
+                        fdb.collection('users').doc(uid).collection('bookmarks').get(),
+                        fdb.collection('users').doc(uid).collection('folders').get(),
+                        fdb.collection('users').doc(uid).collection('tags').get(),
+                        fdb.collection('users').doc(uid).collection('trash').get()
+                    ]);
+
+                    data.bookmarks = bSnap.empty ? [] : bSnap.docs.map(d => d.data());
+                    data.folders = fSnap.empty ? [] : fSnap.docs.map(d => d.data());
+                    data.tags = tSnap.empty ? [] : tSnap.docs.map(d => d.data());
+                    data.trash = trSnap.empty ? [] : trSnap.docs.map(d => d.data());
+                }
+
+                setBookmarks(data.bookmarks);
+                setCustomFolders(data.folders);
+                setCustomTags(data.tags);
+                setTrash(data.trash);
+
+                prevSyncStateRef.current = data;
+                localStorage.setItem('tweetLastLocalUpdate', cloudTime.toString());
+
+                showToast("Cloud sync complete!", "success");
+
+                // Deterministic guard reset using requestAnimationFrame to ensure React has fully rendered the state
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => {
+                        isCloudUpdateActive.current = false;
+                    });
+                });
+
+            } else if (localTime > cloudTime + 2000) {
+                // Local is newer or untouched after cloud missing, push everything
+                prevSyncStateRef.current = null;
+                await saveToFirestore(uid, true);
+            } else {
+                // Safe and strictly in sync
+                prevSyncStateRef.current = { bookmarks, folders: customFolders, tags: customTags, trash };
             }
         } catch (err) {
             console.error("Cloud Load Error:", err);
@@ -519,34 +584,116 @@ function App() {
         }
     };
 
-    const saveToFirestore = async (uid, force = false) => {
+    const saveToFirestore = async (uid, force = false, explicitData = null) => {
         if (!uid || !isDbLoaded) return;
 
-        // Don't auto-save empty state unless forced
-        if (!force && bookmarks.length === 0 && customFolders.length === 0 && customTags.length === 0) {
-            return;
-        }
+        const currentBookmarks = explicitData ? explicitData.bookmarks : bookmarks;
+        const currentFolders = explicitData ? explicitData.folders : customFolders;
+        const currentTags = explicitData ? explicitData.tags : customTags;
+        const currentTrash = explicitData ? explicitData.trash : trash;
 
-        // Enqueue the save operation to prevent race conditions on concurrent writes
-        saveQueueRef.current = saveQueueRef.current.then(async () => {
+        if (!force && currentBookmarks.length === 0 && currentFolders.length === 0 && currentTags.length === 0) return;
+
+        const saveTask = async () => {
             try {
-                // TODO: Scaling Risk - If the bookmarks array becomes too large (> 1MB), Firestore will reject the write.
-                // A future update should migrate this to subcollections: users/{uid}/bookmarks/{bookmarkId}
-                await fdb.collection('users').doc(uid).set({
-                    bookmarks,
-                    folders: customFolders,
-                    tags: customTags,
-                    trash,
-                    lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                const prevState = prevSyncStateRef.current;
+
+                let batch = fdb.batch();
+                let opsCount = 0;
+                const commitBatch = async () => {
+                    if (opsCount > 0) {
+                        try {
+                            await batch.commit();
+                        } catch (commitErr) {
+                            console.error('Batch commit failed:', commitErr);
+                            throw commitErr; // Critical fix: throw on partial batch fail
+                        }
+                        batch = fdb.batch();
+                        opsCount = 0;
+                    }
+                };
+
+                const applyDiff = async (collectionName, currentItems, prevItems) => {
+                    if (!prevItems) {
+                        for (const item of currentItems) {
+                            const itemId = item.id || item.name;
+                            if (itemId == null) continue; // Skip items without valid IDs
+                            const id = String(itemId);
+                            const ref = fdb.collection('users').doc(uid).collection(collectionName).doc(id);
+                            batch.set(ref, item);
+                            opsCount++;
+                            if (opsCount >= 490) await commitBatch();
+                        }
+                        return;
+                    }
+
+                    const prevMap = new Map((prevItems || []).map(i => [String(i.id || i.name), i]));
+                    const currMap = new Map((currentItems || []).map(i => [String(i.id || i.name), i]));
+
+                    for (const [id, item] of currMap.entries()) {
+                        if (id === "undefined" || id === "null") continue;
+                        const prevItem = prevMap.get(id);
+                        // Shallow check is much faster than JSON.stringify, O(n * props)
+                        if (!prevItem || !isItemEqual(prevItem, item)) {
+                            const ref = fdb.collection('users').doc(uid).collection(collectionName).doc(id);
+                            batch.set(ref, item);
+                            opsCount++;
+                            if (opsCount >= 490) await commitBatch();
+                        }
+                    }
+
+                    for (const id of prevMap.keys()) {
+                        if (!currMap.has(id)) {
+                            const ref = fdb.collection('users').doc(uid).collection(collectionName).doc(id);
+                            batch.delete(ref);
+                            opsCount++;
+                            if (opsCount >= 490) await commitBatch();
+                        }
+                    }
+                };
+
+                await applyDiff('bookmarks', currentBookmarks, prevState?.bookmarks);
+                await applyDiff('folders', currentFolders, prevState?.folders);
+                await applyDiff('tags', currentTags, prevState?.tags);
+                await applyDiff('trash', currentTrash, prevState?.trash);
+
+                await commitBatch();
+
+                await fdb.collection('users').doc(uid).collection('meta').doc('state').set({
+                    lastUpdated: firebase.firestore.FieldValue.serverTimestamp(),
+                    schemaVersion: 2
                 });
-                // Record the time of local save to handle basic conflicts ONLY ON SUCCESS
+
+                // Clear old root document fields selectively to clean up payload without breaking collections or rules
+                if (force && !prevState) {
+                    try {
+                        const rootDoc = await fdb.collection('users').doc(uid).get();
+                        if (rootDoc.exists && rootDoc.data().bookmarks) {
+                            await fdb.collection('users').doc(uid).update({
+                                bookmarks: firebase.firestore.FieldValue.delete(),
+                                folders: firebase.firestore.FieldValue.delete(),
+                                tags: firebase.firestore.FieldValue.delete(),
+                                trash: firebase.firestore.FieldValue.delete()
+                            });
+                        }
+                    } catch (e) { console.warn("Failed to clean up old root doc fields.", e); }
+                }
+
                 localStorage.setItem('tweetLastLocalUpdate', Date.now().toString());
+                prevSyncStateRef.current = { bookmarks: currentBookmarks, folders: currentFolders, tags: currentTags, trash: currentTrash };
             } catch (err) {
-                console.error("Cloud Sync Error:", err);
-                // Optional: Only show error toast occasionally so it doesn't spam on background auto-saves
-                if (force) showToast("Failed to save to cloud. Will retry later.", "error");
+                console.error('Cloud Sync Error:', err);
+                if (force) showToast('Failed to save to cloud. Will retry later.', 'error');
+                throw err;
             }
+        };
+
+        const executeTask = saveQueueRef.current.then(saveTask);
+        saveQueueRef.current = executeTask.catch(e => {
+            console.error("Queue boundary recovered from error", e);
         });
+
+        return executeTask;
     };
 
     const [dragOverFolderId, setDragOverFolderId] = useState(null);
@@ -866,6 +1013,14 @@ function App() {
     const handleImportJSON = (event) => {
         const file = event.target.files[0];
         if (!file) return;
+
+        // Prevent importing if it exceeds 100MB Limit
+        if (file.size + storageInfo.used >= 100 * 1024 * 1024) {
+            showToast('Archive Limit (100 MB) reached. Please delete some items first.', 'error');
+            event.target.value = null;
+            return;
+        }
+
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
@@ -905,6 +1060,12 @@ function App() {
 
     const handleAddBookmark = (e) => {
         e.preventDefault();
+
+        // 100 MB Safety Limit
+        if (storageInfo.used >= 100 * 1024 * 1024) {
+            return showToast('Archive Limit Reached (100 MB). Please delete items to free up space.', 'error');
+        }
+
         const tweetId = extractTweetId(newUrl);
         if (!tweetId) return showToast('Please enter a valid Twitter or Reddit link.', 'error');
 
