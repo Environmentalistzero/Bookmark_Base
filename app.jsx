@@ -420,15 +420,20 @@ function App() {
     const [storageInfo, setStorageInfo] = useState({ used: 0, quota: 0 });
 
     useEffect(() => {
-        if (navigator.storage && navigator.storage.estimate) {
-            navigator.storage.estimate().then(estimate => {
-                setStorageInfo({
-                    used: estimate.usage || 0,
-                    quota: estimate.quota || 0
-                });
+        // Calculate the exact payload size to reflect true archive size and cloud capacity
+        try {
+            const dataToMeasure = { bookmarks, customFolders, customTags, trash };
+            const jsonString = JSON.stringify(dataToMeasure);
+            const byteSize = new Blob([jsonString]).size;
+
+            setStorageInfo({
+                used: byteSize,
+                quota: 100 * 1024 * 1024 // Fixed 100MB Quota
             });
+        } catch (err) {
+            console.error("Failed to calculate archive size:", err);
         }
-    }, [bookmarks, trash]);
+    }, [bookmarks, customFolders, customTags, trash]);
 
     // Handle Auth Changes
     useEffect(() => {
