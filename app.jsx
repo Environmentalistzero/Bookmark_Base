@@ -407,7 +407,24 @@ function App() {
     const [initialFocusedTweet, setInitialFocusedTweet] = useState(null);
     const [activeAddMenu, setActiveAddMenu] = useState(null);
 
-    const [activeFolder, setActiveFolder] = useState('All');
+    const [activeFilters, setActiveFilters] = useState(['All']);
+
+    const toggleFilter = (filter, isMulti = false) => {
+        setActiveFilters(prev => {
+            if (filter === 'Trash') return ['Trash'];
+            if (filter === 'All' || filter === 'AllTags') return ['All'];
+
+            if (!isMulti) return [filter];
+
+            let next = prev.filter(f => f !== 'Trash' && f !== 'All' && f !== 'AllTags');
+            if (next.includes(filter)) {
+                next = next.filter(f => f !== filter);
+            } else {
+                next.push(filter);
+            }
+            return next.length === 0 ? ['All'] : next;
+        });
+    };
     const [searchQuery, setSearchQuery] = useState('');
     const [gridCols, setGridCols] = useState(() => parseInt(localStorage.getItem('tweetGridCols')) || 3);
 
@@ -960,7 +977,7 @@ function App() {
 
     useEffect(() => {
         setVisibleCount(20);
-    }, [activeFolder, debouncedSearchQuery, gridCols]);
+    }, [activeFilters, debouncedSearchQuery, gridCols]);
 
     useEffect(() => {
         const observer = new IntersectionObserver(
@@ -989,6 +1006,16 @@ function App() {
             });
         }
     }, [previewState?.medias]);
+
+    useEffect(() => {
+        const handleClickOutside = (e) => {
+            if (!e.target.closest('.dropdown-container')) {
+                setActiveAddMenu(null);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
 
     // --- HANDLERS ---
     const handleExportJSON = (isAuto = false) => {
@@ -1211,7 +1238,7 @@ function App() {
 
     const selectFolderFilter = (folderName) => {
         const nextFolder = folderName || 'Unsorted';
-        setActiveFolder(nextFolder);
+        toggleFilter(nextFolder);
 
         if (!folderName || folderName === 'Unsorted' || folderName === 'General' || folderName === 'Genel') {
             return;
@@ -1234,7 +1261,7 @@ function App() {
     };
 
     const selectTagFilter = (tagName) => {
-        setActiveFolder(`tag:${tagName}`);
+        toggleFilter(`tag:${tagName}`);
         setIsTagsExpanded(true);
     };
 
@@ -1295,18 +1322,27 @@ function App() {
     const unsortedCount = useMemo(() => bookmarks.filter(b => !b.folder || b.folder === 'General' || b.folder === 'Genel').length, [bookmarks]);
 
     const filteredBookmarks = useMemo(() => {
-        const source = activeFolder === 'Trash' ? trash : bookmarks;
+        const source = activeFilters.includes('Trash') ? trash : bookmarks;
+        const tagFilters = activeFilters.filter(f => f.startsWith('tag:'));
+        const folderFilters = activeFilters.filter(f => !f.startsWith('tag:'));
+
         const filtered = source.filter(b => {
-            let mF = false;
-            if (activeFolder === 'All' || activeFolder === 'Trash') mF = true;
-            else if (activeFolder === 'Unsorted') mF = (!b.folder || b.folder === 'General' || b.folder === 'Genel');
-            else if (activeFolder.startsWith('tag:')) {
-                const tagName = activeFolder.split(':')[1];
-                mF = (b.tags || []).includes(tagName);
-            } else {
-                const f = customFolders.find(f => f.name === activeFolder);
-                mF = f ? getFolderAndDescendants(f.id, customFolders).includes(b.folder) : (b.folder === activeFolder);
-            }
+            // Tag logic: MUST match ALL selected tags (Intersection)
+            const matchTags = tagFilters.every(filter => {
+                const tagName = filter.split(':')[1];
+                return (b.tags || []).includes(tagName);
+            });
+
+            // Folder logic: MUST match ANY selected folder or special view (Union)
+            // If no specific folder filter is active (only tags), we allow all folders
+            const matchFolders = folderFilters.length === 0 || folderFilters.some(filter => {
+                if (filter === 'All' || filter === 'AllTags' || filter === 'Trash') return true;
+                if (filter === 'Unsorted') return (!b.folder || b.folder === 'General' || b.folder === 'Genel');
+                const f = customFolders.find(f => f.name === filter);
+                return f ? getFolderAndDescendants(f.id, customFolders).includes(b.folder) : (b.folder === filter);
+            });
+
+            const mF = matchTags && matchFolders;
             const s = debouncedSearchQuery.toLowerCase();
             return mF && (!s || (b.tags || []).some(t => t.includes(s)) || (b.description || '').toLowerCase().includes(s) || (b.tweetText || '').toLowerCase().includes(s) || (b.authorName || '').toLowerCase().includes(s));
         });
@@ -1316,7 +1352,7 @@ function App() {
             const bTime = b.timestamp || parseInt(b.id) || 0;
             return bTime - aTime;
         });
-    }, [bookmarks, trash, activeFolder, debouncedSearchQuery, customFolders]);
+    }, [bookmarks, trash, activeFilters, debouncedSearchQuery, customFolders]);
 
 
     // Helper: check if targetId is a descendant of folderId
@@ -1332,7 +1368,7 @@ function App() {
     const FolderItem = ({ folder, depth = 0 }) => {
         const children = customFolders.filter(f => f.parentId === folder.id);
         const isExpanded = expandedFolders.includes(folder.id);
-        const isActive = activeFolder === folder.name;
+        const isActive = activeFilters.includes(folder.name);
         const isDragOver = dragOverFolderId === folder.id;
         return (
             <div className="w-full">
@@ -1355,12 +1391,12 @@ function App() {
                         }
                         dragItemRef.current = null;
                     }}
-                    className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white' : 'text-slate-600 hover:bg-slate-100'} ${isDragOver ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
-                    style={{ marginLeft: `${depth * 1}rem`, padding: '0.3rem 0', ...(isActive && !isDragOver ? { backgroundColor: accentColor } : {}) }}
+                    className={`group flex items-center rounded-xl transition-all cursor-pointer mx-1 ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${isDragOver ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                    style={{ marginLeft: `${depth * 1 + 0.25}rem`, padding: '0.15rem 0', ...(isActive && !isDragOver ? { backgroundColor: accentColor } : {}) }}
                 >
-                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><LucideIcon name={isExpanded ? "chevron-down" : "chevron-right"} size={10} /></button>
-                    <button onClick={() => setActiveFolder(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-medium truncate py-1.5 pl-1 text-left"><LucideIcon name="folder" className="text-[14px]" style={{ color: isActive ? '#fff' : folder.color }} /> <span>{folder.name}</span></button>
-                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[10px]" /></button></div>
+                    <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><LucideIcon name={isExpanded ? "chevron-down" : "chevron-right"} size={12} /></button>
+                    <button onClick={() => toggleFilter(folder.name)} className="flex-1 flex items-center gap-2.5 text-[15px] font-bold truncate py-1.5 pl-1 text-left"><LucideIcon name="folder" className="text-[14px]" style={{ color: isActive ? '#fff' : folder.color }} /> <span>{folder.name}</span></button>
+                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[11px]" /></button></div>
                 </div>
                 {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
             </div>
@@ -1430,19 +1466,19 @@ function App() {
                             <button onClick={() => setIsSidebarOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full"><LucideIcon name="x" className="text-slate-400" /></button>
                         </div>
                         <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
-                            <div className="space-y-0.5">
-                                <div onClick={() => { setActiveFolder('All'); setIsSidebarOpen(false); }} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'All' ? { backgroundColor: accentColor } : {}}>
-                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
-                                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
+                            <div className="space-y-0">
+                                <div onClick={() => { toggleFilter('All'); setIsSidebarOpen(false); }} className={`mx-1 flex items-center rounded-xl transition-all cursor-pointer ${activeFilters.includes('All') ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFilters.includes('All') ? { backgroundColor: accentColor } : {}}>
+                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
+                                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60">{bookmarks.length}</span></div>
                                 </div>
-                                <div onClick={() => { setActiveFolder('Unsorted'); setIsSidebarOpen(false); }} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'Unsorted' ? { backgroundColor: accentColor } : {}}>
-                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
-                                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
+                                <div onClick={() => { toggleFilter('Unsorted'); setIsSidebarOpen(false); }} className={`mx-1 flex items-center rounded-xl transition-all cursor-pointer ${activeFilters.includes('Unsorted') ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFilters.includes('Unsorted') ? { backgroundColor: accentColor } : {}}>
+                                    <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
+                                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60">{unsortedCount}</span></div>
                                 </div>
                             </div>
                             <div>
                                 <div className="flex justify-between items-center mb-3 px-2"><h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2><button onClick={(e) => { e.stopPropagation(); setEditingFolder(null); setFolderNameInput(''); setFolderColorInput('#3b82f6'); setIsFolderModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button></div>
-                                <div className="space-y-0.5">
+                                <div className="space-y-0">
                                     {customFolders.filter(f => !f.parentId).map(f => <FolderItem key={f.id} folder={f} />)}
                                 </div>
                             </div>
@@ -1450,18 +1486,23 @@ function App() {
                                 <div className="group flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
                                     <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><LucideIcon name={isTagsExpanded ? "chevron-down" : "chevron-right"} size={10} /> Tags</h2>
                                     <div className="flex items-center gap-1.5">
-                                        <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); setIsSidebarOpen(false); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black transition-all" title="View all tags"><LucideIcon name="eye" className="text-[10px]" /></button>
                                         <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button>
                                     </div>
                                 </div>
                                 {isTagsExpanded && (
-                                    <div className="space-y-0.5">
-                                        {customTags.map(tag => {
+                                    <div className="flex flex-wrap gap-1.5 px-2 mt-1">
+                                        {[...customTags].sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0)).map(tag => {
+                                            const isActive = activeFilters.includes(`tag:${tag.name}`);
                                             return (
-                                                <div key={tag.id} onClick={() => { setActiveFolder(`tag:${tag.name}`); setIsSidebarOpen(false); }} className={`flex items-center cursor-pointer rounded-xl transition-all px-3 py-2 ${activeFolder === `tag:${tag.name}` ? 'bg-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-50'}`}>
-                                                    <span className="font-black mr-1.5" style={{ color: tag.color }}>#</span>
-                                                    <span className="text-[14px] font-medium">{tag.name}</span>
-                                                    <span className="ml-auto text-[11px] font-bold opacity-50">{tagCounts[tag.name] || 0}</span>
+                                                <div
+                                                    key={tag.id}
+                                                    onClick={() => { toggleFilter(`tag:${tag.name}`); setIsSidebarOpen(false); }}
+                                                    className={`h-7 flex items-center cursor-pointer rounded-lg transition-all px-2.5 border ${isActive ? 'text-white shadow-sm border-transparent' : 'text-slate-500 bg-slate-50 border-slate-100 hover:bg-slate-100'}`}
+                                                    style={isActive ? { backgroundColor: accentColor } : {}}
+                                                >
+                                                    <span className="font-black mr-1.5 text-[11px] flex items-center" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
+                                                    <span className="text-[13px] font-bold flex items-center">{tag.name}</span>
+                                                    <span className={`ml-2 text-[10px] font-black flex items-center h-full pt-[1px] ${isActive ? 'opacity-70' : 'opacity-30'}`}>{tagCounts[tag.name] || 0}</span>
                                                 </div>
                                             );
                                         })}
@@ -1474,7 +1515,7 @@ function App() {
                             <div className={`p-3 rounded-2xl border transition-all ${user ? 'bg-blue-50/50 border-blue-100' : 'bg-slate-50 border-slate-100'}`}>
                                 {user ? (
                                     <div className="flex items-center gap-3">
-                                        <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full border border-white shadow-sm" />
+                                        {user.photoURL && <img src={user.photoURL} alt="User" className="w-8 h-8 rounded-full border border-white shadow-sm" />}
                                         <div className="flex-1 min-w-0">
                                             <p className="text-[13px] font-bold text-slate-800 truncate">{user.displayName || 'User'}</p>
                                             <p className="text-[10px] font-bold text-blue-500 uppercase tracking-widest leading-none">{isSyncing ? 'Syncing...' : 'Online'}</p>
@@ -1490,7 +1531,7 @@ function App() {
                                 )}
                             </div>
                             <div className="flex gap-2">
-                                <button onClick={() => { setActiveFolder('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFolder === 'Trash' ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
+                                <button onClick={() => { toggleFilter('Trash'); setIsSidebarOpen(false); }} className={`flex-1 flex items-center gap-2 px-3 py-2 text-[13px] font-bold rounded-xl ${activeFilters.includes('Trash') ? 'bg-red-50 text-red-500' : 'text-slate-400 hover:bg-slate-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
                                 <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:bg-slate-100 rounded-xl"><LucideIcon name="settings" size={18} /></button>
                             </div>
                         </div>
@@ -1507,14 +1548,14 @@ function App() {
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
-                    <div className="space-y-0.5">
-                        <div onClick={() => setActiveFolder('All')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'All' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'All' ? { backgroundColor: accentColor } : {}}>
-                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
-                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{bookmarks.length}</span></div>
+                    <div className="space-y-0">
+                        <div onClick={() => toggleFilter('All')} className={`mx-1 flex items-center rounded-xl transition-all cursor-pointer ${activeFilters.includes('All') ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFilters.includes('All') ? { backgroundColor: accentColor } : {}}>
+                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
+                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60">{bookmarks.length}</span></div>
                         </div>
-                        <div onClick={() => setActiveFolder('Unsorted')} className={`flex items-center rounded-xl transition-all cursor-pointer ${activeFolder === 'Unsorted' ? 'text-white shadow-md' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFolder === 'Unsorted' ? { backgroundColor: accentColor } : {}}>
-                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-medium text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
-                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60">{unsortedCount}</span></div>
+                        <div onClick={() => toggleFilter('Unsorted')} className={`mx-1 flex items-center rounded-xl transition-all cursor-pointer ${activeFilters.includes('Unsorted') ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFilters.includes('Unsorted') ? { backgroundColor: accentColor } : {}}>
+                            <button className="flex-1 flex items-center gap-3 px-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
+                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60">{unsortedCount}</span></div>
                         </div>
                     </div>
                     <div>
@@ -1541,18 +1582,26 @@ function App() {
                         <div className="group flex justify-between items-center mb-3 px-2 cursor-pointer tag-header transition-all py-1" onClick={() => setIsTagsExpanded(!isTagsExpanded)}>
                             <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider flex items-center gap-2"><LucideIcon name={isTagsExpanded ? "chevron-down" : "chevron-right"} size={10} /> Tags</h2>
                             <div className="flex items-center gap-1.5">
-                                <button onClick={(e) => { e.stopPropagation(); setActiveFolder('AllTags'); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center text-slate-400 hover:text-black opacity-0 group-hover:opacity-100 transition-all" title="View all tags"><LucideIcon name="eye" className="text-[10px]" /></button>
                                 <button onClick={(e) => { e.stopPropagation(); setEditingTag(null); setTagNameInput(''); setTagColorInput('#64748b'); setIsTagModalOpen(true); }} className="w-6 h-6 bg-slate-100 rounded-lg flex items-center justify-center hover:text-black"><LucideIcon name="plus" size={12} /></button>
                             </div>
                         </div>
                         {isTagsExpanded && (
-                            <div className="space-y-0.5 mt-1">
-                                {customTags.length > 0 ? customTags.map(tag => {
-                                    const isActive = activeFolder === `tag:${tag.name}`;
+                            <div className="flex flex-wrap gap-1.5 px-2 mt-1">
+                                {customTags.length > 0 ? [...customTags].sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0)).map(tag => {
+                                    const isActive = activeFilters.includes(`tag:${tag.name}`);
                                     return (
-                                        <div key={tag.id} className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white shadow-sm' : 'hover:bg-slate-100'}`} style={isActive ? { backgroundColor: accentColor } : {}}>
-                                            <button onClick={() => setActiveFolder(`tag:${tag.name}`)} className="flex-1 flex items-center gap-2 px-3 py-1.5 text-[14px] font-medium truncate text-left"><span className="font-black text-[13px] shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span> {tag.name}</button>
-                                            <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-bold opacity-60 group-hover:hidden">{tagCounts[tag.name] || 0}</span><button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[9px]" /></button></div>
+                                        <div
+                                            key={tag.id}
+                                            onClick={() => toggleFilter(`tag:${tag.name}`)}
+                                            className={`group h-8 flex items-center rounded-lg transition-all cursor-pointer px-3 py-0.5 border ${isActive ? 'text-white shadow-sm border-transparent' : 'text-slate-600 bg-slate-50 border-slate-100 hover:border-slate-200 hover:bg-slate-100'}`}
+                                            style={isActive ? { backgroundColor: accentColor } : {}}
+                                        >
+                                            <span className="font-black text-[12px] mr-1.5 shrink-0 flex items-center" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
+                                            <span className="text-[14px] font-bold truncate max-w-[140px] flex items-center">{tag.name}</span>
+                                            <div className="flex items-center justify-center ml-2 min-w-[14px] h-full">
+                                                <span className={`text-[11px] font-black flex items-center pt-[1px] group-hover:hidden ${isActive ? 'opacity-70' : 'opacity-30'}`}>{tagCounts[tag.name] || 0}</span>
+                                                <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`hidden group-hover:flex items-center hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={11} /></button>
+                                            </div>
                                         </div>
                                     );
                                 }) : <div className="px-3 py-2 text-[11px] text-slate-400 italic">No tags yet</div>}
@@ -1590,7 +1639,7 @@ function App() {
                         </label>
                     </div>
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setActiveFolder('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFolder === 'Trash' ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
+                        <button onClick={() => toggleFilter('Trash')} className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-xl text-[15px] font-medium transition-all ${activeFilters.includes('Trash') ? 'bg-red-50 text-red-600' : 'text-slate-500 hover:bg-red-50'}`}><LucideIcon name="trash-2" size={18} /> Trash</button>
                         <button onClick={() => setIsSettingsOpen(true)} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-all shrink-0"><LucideIcon name="settings" size={18} className="text-sm" /></button>
                     </div>
                 </div>
@@ -1600,7 +1649,91 @@ function App() {
                 <header className="h-16 sm:h-20 bg-white/80 backdrop-blur-md border-b border-slate-200 flex items-center justify-between px-4 sm:px-8 z-40 shrink-0">
                     <div className="flex items-center gap-2 sm:gap-4 min-w-0">
                         <button className="sm:hidden p-2 text-slate-500 hover:bg-slate-100 rounded-lg shrink-0" onClick={() => setIsSidebarOpen(true)}><LucideIcon name="menu" /></button>
-                        <h2 className="text-base sm:text-lg font-bold text-slate-900 capitalize truncate">{activeFolder === 'AllTags' ? 'All Tags' : activeFolder.startsWith('tag:') ? `#${activeFolder.split(':')[1]}` : activeFolder}</h2>
+
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                            {activeFilters.includes('All') || activeFilters.includes('AllTags') || activeFilters.includes('Trash') ? (
+                                <h2 className="text-base sm:text-lg font-bold text-slate-900 capitalize truncate">
+                                    {activeFilters.includes('AllTags') ? 'All Tags' : activeFilters.includes('Trash') ? 'Trash' : 'All Bookmarks'}
+                                </h2>
+                            ) : (
+                                activeFilters.map(filter => (
+                                    <div key={filter} className="group flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-full text-sm font-bold cursor-pointer hover:bg-red-50 hover:text-red-500 transition-all border border-transparent hover:border-red-200" onClick={() => toggleFilter(filter, true)}>
+                                        {filter.startsWith('tag:') ? (
+                                            <>
+                                                <span className="font-black" style={{ color: customTags.find(t => t.name === filter.split(':')[1])?.color || '#64748b' }}>#</span>
+                                                <span>{filter.split(':')[1]}</span>
+                                            </>
+                                        ) : filter === 'Unsorted' ? (
+                                            <>
+                                                <LucideIcon name="inbox" size={12} className="text-slate-400" />
+                                                <span>Unsorted</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <LucideIcon name="folder" size={13} style={{ color: customFolders.find(f => f.name === filter)?.color || '#94a3b8' }} />
+                                                <span>{filter}</span>
+                                            </>
+                                        )}
+                                        <LucideIcon name="x" className="ml-1 opacity-0 group-hover:opacity-100 w-3 h-3" />
+                                    </div>
+                                ))
+                            )}
+
+                            {!activeFilters.includes('Trash') && !activeFilters.includes('AllTags') && (
+                                <div className="relative dropdown-container">
+                                    <button onClick={(e) => { e.stopPropagation(); setActiveAddMenu(activeAddMenu === 'headerFilter' ? null : 'headerFilter'); }} className="w-8 h-8 flex items-center justify-center bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 transition-all shadow-sm shrink-0"><LucideIcon name="plus" size={14} /></button>
+                                    {activeAddMenu === 'headerFilter' && (
+                                        <div className="absolute top-full left-0 mt-3 w-[420px] bg-white rounded-2xl shadow-2xl border border-slate-100 z-[100] p-4 flex gap-6" onClick={(e) => e.stopPropagation()}>
+                                            <div className="flex-1 max-h-72 overflow-y-auto custom-scrollbar pr-1">
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase px-2 mb-3 tracking-widest">Folders</div>
+                                                <div className="space-y-0.5">
+                                                    {!activeFilters.includes('All') && (
+                                                        <div onClick={(e) => { e.stopPropagation(); toggleFilter('All', true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
+                                                            <LucideIcon name="layers" size={14} className="text-slate-400" /> All Bookmarks
+                                                        </div>
+                                                    )}
+                                                    {!activeFilters.includes('Unsorted') && (
+                                                        <div onClick={(e) => { e.stopPropagation(); toggleFilter('Unsorted', true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
+                                                            <LucideIcon name="inbox" size={14} className="text-slate-400" /> Unsorted
+                                                        </div>
+                                                    )}
+                                                    {customFolders.filter(f => !activeFilters.includes(f.name)).map(f => (
+                                                        <div key={f.name} onClick={(e) => { e.stopPropagation(); toggleFilter(f.name, true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
+                                                            <LucideIcon name="folder" size={14} style={{ color: f.color }} />
+                                                            {f.name}
+                                                        </div>
+                                                    ))}
+                                                    {customFolders.filter(f => !activeFilters.includes(f.name)).length === 0 && activeFilters.includes('All') && activeFilters.includes('Unsorted') && (
+                                                        <div className="px-3 py-2 text-xs text-slate-400 italic">No more folders</div>
+                                                    )}
+                                                </div>
+                                            </div>
+
+                                            <div className="w-px bg-slate-100 self-stretch"></div>
+
+                                            <div className="flex-1 max-h-72 overflow-y-auto custom-scrollbar pl-1">
+                                                <div className="text-[10px] font-bold text-slate-400 uppercase px-2 mb-3 tracking-widest">Tags</div>
+                                                <div className="space-y-0.5">
+                                                    {customTags.filter(t => !activeFilters.includes(`tag:${t.name}`)).length > 0 ? (
+                                                        customTags
+                                                            .filter(t => !activeFilters.includes(`tag:${t.name}`))
+                                                            .sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0))
+                                                            .map(t => (
+                                                                <div key={t.id} onClick={(e) => { e.stopPropagation(); toggleFilter(`tag:${t.name}`, true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
+                                                                    <span className="font-black" style={{ color: t.color }}>#</span>
+                                                                    {t.name}
+                                                                </div>
+                                                            ))
+                                                    ) : (
+                                                        <div className="px-3 py-2 text-xs text-slate-400 italic">No more tags</div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+                        </div>
                     </div>
                     <div className="flex items-center gap-2 sm:gap-4">
                         <div className="relative hidden md:block">
@@ -1612,7 +1745,7 @@ function App() {
                             <button onClick={() => setIsGridMenuOpen(!isGridMenuOpen)} className="flex items-center gap-2 bg-slate-100 px-3 sm:px-4 py-2 rounded-full text-xs font-bold text-slate-600 hover:bg-slate-200 focus:outline-none transition-colors"><LucideIcon name="columns" /><span className="hidden sm:inline"> {gridCols} Column</span></button>
                             {isGridMenuOpen && <div className="absolute right-0 top-full mt-2 w-32 bg-white border border-slate-100 shadow-xl rounded-xl overflow-hidden z-[60]">{[1, 2, 3, 4, 5].map(n => <button key={n} onClick={() => { setGridCols(n); setIsGridMenuOpen(false); }} className={`w-full text-left px-4 py-2.5 text-xs font-bold ${gridCols === n ? 'bg-blue-50 text-blue-600' : 'text-slate-600 hover:bg-slate-50'}`}>{n} Column</button>)}</div>}
                         </div>
-                        {activeFolder === 'Trash' ? (
+                        {activeFilters.includes('Trash') ? (
                             <button onClick={handleClearTrash} className="text-white bg-red-500 px-5 py-2.5 rounded-full text-xs font-bold hover:bg-red-600 transition-all shadow-md active:scale-95 flex items-center"><LucideIcon name="trash-2" size={18} className="mr-2" /> CLEAR ALL</button>
                         ) : (
                             <button onClick={() => setIsModalOpen(true)} className="text-white px-4 sm:px-5 py-2 sm:py-2.5 rounded-full text-xs font-bold hover:opacity-90 transition-all shadow-md active:scale-95 flex items-center" style={{ backgroundColor: accentColor }}><LucideIcon name="plus" className="sm:mr-2" /><span className="hidden sm:inline"> NEW</span></button>
@@ -1620,7 +1753,7 @@ function App() {
                     </div>
                 </header>
                 <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-8 custom-scrollbar">
-                    {activeFolder === 'AllTags' ? (
+                    {activeFilters.includes('AllTags') ? (
                         <div className="mx-auto max-w-4xl">
                             <div className="mb-8">
                                 <div className="flex items-center gap-3 mb-2">
@@ -1638,7 +1771,7 @@ function App() {
                                         return (
                                             <button
                                                 key={tag.id}
-                                                onClick={() => setActiveFolder(`tag:${tag.name}`)}
+                                                onClick={() => toggleFilter(`tag:${tag.name}`)}
                                                 className="group flex items-center gap-2.5 px-5 py-3 rounded-2xl text-[14px] font-bold transition-all active:scale-95 border bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:shadow-md hover:-translate-y-0.5"
                                             >
                                                 <span className="font-black text-[16px]" style={{ color: tag.color }}>#</span>
@@ -1663,7 +1796,7 @@ function App() {
                                     {bookmarkColumns.map((col, colIdx) => (
                                         <div key={colIdx} className="flex-1 flex flex-col gap-3 sm:gap-6 min-w-0">
                                             {col.map(b => (
-                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') { setFocusedTweet(b); setInitialFocusedTweet(b); setIsNoteEditing(false); } }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
+                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (!activeFilters.includes('Trash')) { setFocusedTweet(b); setInitialFocusedTweet(b); setIsNoteEditing(false); } }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFilters.includes('Trash') ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
                                                     <div className="w-full">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
 
                                                     <div className="mt-4 space-y-3">
@@ -1674,7 +1807,7 @@ function App() {
                                                                 <button
                                                                     onClick={(e) => {
                                                                         e.stopPropagation();
-                                                                        selectFolderFilter(b.folder || 'Unsorted');
+                                                                        toggleFilter(b.folder || 'Unsorted');
                                                                     }}
                                                                     className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap hover:bg-slate-200 transition-colors"
                                                                 >
@@ -1687,7 +1820,7 @@ function App() {
                                                                             key={tag}
                                                                             onClick={(e) => {
                                                                                 e.stopPropagation();
-                                                                                selectTagFilter(tag);
+                                                                                toggleFilter(`tag:${tag}`);
                                                                             }}
                                                                             className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate hover:bg-slate-100 transition-colors"
                                                                         >
@@ -1697,7 +1830,7 @@ function App() {
                                                                 })}
                                                             </div>
                                                             <div className="flex items-center gap-2 shrink-0">
-                                                                {activeFolder === 'Trash' ? (
+                                                                {activeFilters.includes('Trash') ? (
                                                                     <div className="flex gap-2"><button onClick={(e) => handleRestoreFromTrash(e, b.id)} className="text-green-500 hover:text-green-600"><LucideIcon name="rotate-ccw" /></button><button onClick={(e) => handlePermanentDelete(e, b.id)} className="text-red-500 hover:text-red-700"><LucideIcon name="trash-2" size={18} /></button></div>
                                                                 ) : (
                                                                     <button onClick={(e) => handleMoveToTrash(e, b.id)} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-600 transition-all p-1"><LucideIcon name="trash-2" size={18} className="text-[13px]" /></button>
@@ -1779,7 +1912,7 @@ function App() {
                                                 setFocusedTweet(updated);
                                                 setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
                                             }}>
-                                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></div>
+                                                <LucideIcon name="folder" size={14} style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }} />
                                                 <span>{focusedTweet.folder}</span>
                                                 <LucideIcon name="x" className="ml-1 opacity-0 group-hover:opacity-100 w-3 h-3" />
                                             </div>
@@ -1797,7 +1930,7 @@ function App() {
                                                                 setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
                                                                 setActiveAddMenu(null);
                                                             }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg cursor-pointer text-sm font-medium text-slate-700">
-                                                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }}></div>
+                                                                <LucideIcon name="folder" size={14} style={{ color: f.color }} />
                                                                 {f.name}
                                                             </div>
                                                         )) : <div className="px-3 py-2 text-xs text-slate-400 italic">No custom folders.</div>}
@@ -1816,7 +1949,7 @@ function App() {
                                                 setFocusedTweet(updated);
                                                 setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
                                             }}>
-                                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></div>
+                                                <span className="font-black" style={{ color: customTags.find(t => t.name === tag)?.color || '#64748b' }}>#</span>
                                                 <span>{tag}</span>
                                                 <LucideIcon name="x" className="ml-1 opacity-0 group-hover:opacity-100 w-3 h-3" />
                                             </div>
@@ -1837,7 +1970,7 @@ function App() {
                                                             setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
                                                             setActiveAddMenu(null);
                                                         }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg cursor-pointer text-sm font-medium text-slate-700">
-                                                            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.color }}></div>
+                                                            <span className="font-black" style={{ color: t.color }}>#</span>
                                                             {t.name}
                                                         </div>
                                                     )) : <div className="px-3 py-2 text-xs text-slate-400 italic">No more tags</div>}
