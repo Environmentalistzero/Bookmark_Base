@@ -506,14 +506,14 @@ function App() {
 
             if (metaDoc.exists) {
                 const mData = metaDoc.data();
-                cloudTime = mData.lastUpdated?.toMillis() || 0;
+                cloudTime = typeof mData.lastUpdated === 'number' ? mData.lastUpdated : (mData.lastUpdated?.toMillis?.() || 0);
                 isMigrated = mData.schemaVersion >= 2;
             } else {
                 // Determine if we need migration from old doc
                 const oldDoc = await fdb.collection('users').doc(uid).get();
                 if (oldDoc.exists) {
                     oldData = oldDoc.data();
-                    cloudTime = oldData.lastUpdated?.toMillis() || 0;
+                    cloudTime = typeof oldData.lastUpdated === 'number' ? oldData.lastUpdated : (oldData.lastUpdated?.toMillis?.() || 0);
                     forceMigration = true;
                 }
             }
