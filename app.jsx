@@ -27,14 +27,17 @@ const getRandomColor = () => TAG_COLORS[Math.floor(Math.random() * TAG_COLORS.le
 const formatDate = (dateStr) => {
     if (!dateStr) return '';
     try {
-        const d = new Date(dateStr);
-        if (isNaN(d.getTime())) {
-            // Try parsing MM/DD/YYYY format
-            const parts = dateStr.split('/');
-            if (parts.length === 3) return `${parts[1].padStart(2, '0')}.${parts[0].padStart(2, '0')}.${parts[2]}`;
-            return dateStr;
+        const d = new Date(Number(dateStr) || dateStr);
+        if (!isNaN(d.getTime())) {
+            return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
         }
-        return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+        const parts = dateStr.split(/[-/.]/);
+        if (parts.length === 3) {
+            if (parts[0].length === 4) return `${parts[2].padStart(2, '0')}.${parts[1].padStart(2, '0')}.${parts[0]}`;
+            if (dateStr.includes('/')) return `${parts[1].padStart(2, '0')}.${parts[0].padStart(2, '0')}.${parts[2]}`;
+            return `${parts[0].padStart(2, '0')}.${parts[1].padStart(2, '0')}.${parts[2]}`;
+        }
+        return dateStr;
     } catch { return dateStr; }
 };
 
@@ -401,6 +404,8 @@ function App() {
     const [user, setUser] = useState(null);
     const [isDbLoaded, setIsDbLoaded] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [initialFocusedTweet, setInitialFocusedTweet] = useState(null);
+    const [activeAddMenu, setActiveAddMenu] = useState(null);
 
     const [activeFolder, setActiveFolder] = useState('All');
     const [searchQuery, setSearchQuery] = useState('');
@@ -429,12 +434,26 @@ function App() {
     useEffect(() => {
         const unsubscribe = auth.onAuthStateChanged(u => {
             setUser(u);
-            if (u) {
-                loadFromFirestore(u.uid);
-            }
+            // We don't call loadFromFirestore here directly anymore.
+            // It is handled by the initial loadDb effect or a dedicated auth+db effect.
         });
         return () => unsubscribe();
     }, []);
+
+    // Track the last UID we loaded to handle user switching correctly
+    const lastLoadedUid = useRef(null);
+    const isCloudUpdateActive = useRef(false);
+    const saveQueueRef = useRef(Promise.resolve());
+
+    // Effect to trigger loadFromFirestore ONLY when both user and DB are ready for the first time or when user changes
+    useEffect(() => {
+        if (user && isDbLoaded && lastLoadedUid.current !== user.uid) {
+            lastLoadedUid.current = user.uid;
+            loadFromFirestore(user.uid);
+        } else if (!user) {
+            lastLoadedUid.current = null;
+        }
+    }, [user, isDbLoaded]);
 
     const handleLogin = async () => {
         const provider = new firebase.auth.GoogleAuthProvider();
@@ -453,41 +472,81 @@ function App() {
     };
 
     const loadFromFirestore = async (uid) => {
+        if (!isDbLoaded) return; // Prevent loading before local DB is ready
         setIsSyncing(true);
         try {
             const doc = await fdb.collection('users').doc(uid).get();
             if (doc.exists) {
                 const data = doc.data();
-                if (data.bookmarks) setBookmarks(data.bookmarks);
-                if (data.folders) setCustomFolders(data.folders);
-                if (data.tags) setCustomTags(data.tags);
-                if (data.trash) setTrash(data.trash);
-                showToast("Cloud sync complete!", "success");
+
+                // Compare timestamps to handle simple conflicts (local vs remote)
+                const cloudTime = data.lastUpdated?.toMillis() || 0;
+                const localTime = parseInt(localStorage.getItem('tweetLastLocalUpdate')) || 0;
+
+                // If cloud is newer OR we have empty local data, take cloud data
+                // We add a 2 second tolerance for equality checks to prevent unnecessary local overrides
+                if (cloudTime > localTime + 2000 || (bookmarks.length === 0 && customFolders.length === 0 && customTags.length === 0)) {
+                    // Set a flag to prevent the sync effect from immediately pushing this back
+                    isCloudUpdateActive.current = true;
+                    setBookmarks(data.bookmarks || []);
+                    setCustomFolders(data.folders || []);
+                    setCustomTags(data.tags || []);
+                    setTrash(data.trash || []);
+
+                    // Only update the local timestamp to precisely match the cloud one
+                    localStorage.setItem('tweetLastLocalUpdate', cloudTime.toString());
+
+                    showToast("Cloud sync complete!", "success");
+
+                    // Reset the flag safely
+                    setTimeout(() => { isCloudUpdateActive.current = false; }, 3500);
+                } else if (localTime > cloudTime + 2000) {
+                    // Local is newer, push to cloud instead
+                    await saveToFirestore(uid, true);
+                }
             } else {
-                // First time user, sync local to cloud
-                await saveToFirestore(uid);
+                // First time user, sync local to cloud ONLY if we have local data
+                if (bookmarks.length > 0 || customFolders.length > 0 || customTags.length > 0) {
+                    await saveToFirestore(uid, true);
+                    showToast("Initial cloud backup created.", "success");
+                }
             }
         } catch (err) {
             console.error("Cloud Load Error:", err);
-            showToast("Cloud load failed.", "error");
+            showToast("Cloud load failed. Please check your connection.", "error");
         } finally {
             setIsSyncing(false);
         }
     };
 
-    const saveToFirestore = async (uid) => {
-        if (!uid) return;
-        try {
-            await fdb.collection('users').doc(uid).set({
-                bookmarks,
-                folders: customFolders,
-                tags: customTags,
-                trash,
-                lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
-            });
-        } catch (err) {
-            console.error("Cloud Sync Error:", err);
+    const saveToFirestore = async (uid, force = false) => {
+        if (!uid || !isDbLoaded) return;
+
+        // Don't auto-save empty state unless forced
+        if (!force && bookmarks.length === 0 && customFolders.length === 0 && customTags.length === 0) {
+            return;
         }
+
+        // Enqueue the save operation to prevent race conditions on concurrent writes
+        saveQueueRef.current = saveQueueRef.current.then(async () => {
+            try {
+                // TODO: Scaling Risk - If the bookmarks array becomes too large (> 1MB), Firestore will reject the write.
+                // A future update should migrate this to subcollections: users/{uid}/bookmarks/{bookmarkId}
+                await fdb.collection('users').doc(uid).set({
+                    bookmarks,
+                    folders: customFolders,
+                    tags: customTags,
+                    trash,
+                    lastUpdated: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                // Record the time of local save to handle basic conflicts ONLY ON SUCCESS
+                localStorage.setItem('tweetLastLocalUpdate', Date.now().toString());
+            } catch (err) {
+                console.error("Cloud Sync Error:", err);
+                // Optional: Only show error toast occasionally so it doesn't spam on background auto-saves
+                if (force) showToast("Failed to save to cloud. Will retry later.", "error");
+            }
+        });
     };
 
     const [dragOverFolderId, setDragOverFolderId] = useState(null);
@@ -516,10 +575,7 @@ function App() {
     const [tagColorInput, setTagColorInput] = useState('#64748b');
     const [isTagsExpanded, setIsTagsExpanded] = useState(true);
 
-    const [isEditingFocus, setIsEditingFocus] = useState(false);
-    const [focusEditDesc, setFocusEditDesc] = useState('');
-    const [focusEditTags, setFocusEditTags] = useState('');
-    const [focusEditFolder, setFocusEditFolder] = useState('');
+    const [isNoteEditing, setIsNoteEditing] = useState(false);
 
     const [newUrl, setNewUrl] = useState('');
     const [newFolder, setNewFolder] = useState('');
@@ -725,7 +781,9 @@ function App() {
                     });
 
                     // Offline sync logic
-                    if (user) {
+                    // Only push to cloud if this wasn't triggered BY a cloud load
+                    if (user && isDbLoaded && !isCloudUpdateActive.current) {
+                        // Enqueue the offline sync
                         saveToFirestore(user.uid);
                     }
 
@@ -733,7 +791,7 @@ function App() {
                 } catch (err) { console.error("Dexie sync error:", err); }
             };
             syncDB();
-        }, 1500); // 1.5 sn debounce
+        }, 3000); // 3 sn debounce - Reduced write amplification
 
         return () => clearTimeout(handler);
     }, [bookmarks, customFolders, customTags, trash, isDbLoaded, user]);
@@ -974,29 +1032,7 @@ function App() {
         setEditingTag(null);
     };
 
-    const startFocusEdit = () => {
-        setFocusEditDesc(focusedTweet.description || '');
-        const existingTags = focusedTweet.tags || [];
-        setFocusEditTags(existingTags.length > 0 ? existingTags.join(', ') + ', ' : '');
-        setFocusEditFolder(focusedTweet.folder || 'General');
-        setIsEditingFocus(true);
-    };
 
-    const saveFocusEdit = () => {
-        const tagsArray = focusEditTags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
-        const newTagsList = [...customTags];
-        tagsArray.forEach(tag => {
-            if (!newTagsList.some(t => t.name === tag)) {
-                newTagsList.push({ id: 't_' + Math.random().toString(36).substr(2, 9), name: tag, color: getRandomColor() });
-            }
-        });
-        setCustomTags(newTagsList);
-
-        const updatedTweet = { ...focusedTweet, description: focusEditDesc.trim(), folder: focusEditFolder.trim(), tags: tagsArray };
-        setBookmarks(prev => prev.map(b => b.id === focusedTweet.id ? updatedTweet : b));
-        setFocusedTweet(updatedTweet);
-        setIsEditingFocus(false);
-    };
 
     // --- RENDER HELPERS ---
     const getFolderAndDescendants = (folderId, list) => {
@@ -1005,6 +1041,35 @@ function App() {
             names = names.concat(getFolderAndDescendants(c.id, list));
         });
         return names.filter(Boolean);
+    };
+
+    const selectFolderFilter = (folderName) => {
+        const nextFolder = folderName || 'Unsorted';
+        setActiveFolder(nextFolder);
+
+        if (!folderName || folderName === 'Unsorted' || folderName === 'General' || folderName === 'Genel') {
+            return;
+        }
+
+        const targetFolder = customFolders.find(f => f.name === folderName);
+        if (!targetFolder) return;
+
+        const parentIds = [];
+        let currentParentId = targetFolder.parentId;
+        while (currentParentId) {
+            parentIds.push(currentParentId);
+            const parentFolder = customFolders.find(f => f.id === currentParentId);
+            currentParentId = parentFolder?.parentId || null;
+        }
+
+        if (parentIds.length > 0) {
+            setExpandedFolders(prev => [...new Set([...prev, ...parentIds])]);
+        }
+    };
+
+    const selectTagFilter = (tagName) => {
+        setActiveFolder(`tag:${tagName}`);
+        setIsTagsExpanded(true);
     };
 
     const topLevelFolders = useMemo(() => customFolders.filter(f => !f.parentId), [customFolders]);
@@ -1432,7 +1497,7 @@ function App() {
                                     {bookmarkColumns.map((col, colIdx) => (
                                         <div key={colIdx} className="flex-1 flex flex-col gap-3 sm:gap-6 min-w-0">
                                             {col.map(b => (
-                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') setFocusedTweet(b); }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
+                                                <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (activeFolder !== 'Trash') { setFocusedTweet(b); setInitialFocusedTweet(b); setIsNoteEditing(false); } }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFolder === 'Trash' ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
                                                     <div className="w-full">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
 
                                                     <div className="mt-4 space-y-3">
@@ -1440,10 +1505,29 @@ function App() {
 
                                                         <div className="flex items-center justify-between gap-2">
                                                             <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-                                                                <span className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap"><LucideIcon name="folder" className="mr-1" size={12} style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }} /> {b.folder || 'Unsorted'}</span>
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        selectFolderFilter(b.folder || 'Unsorted');
+                                                                    }}
+                                                                    className="inline-flex items-center px-2 py-0.5 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-bold uppercase tracking-wider whitespace-nowrap hover:bg-slate-200 transition-colors"
+                                                                >
+                                                                    <LucideIcon name="folder" className="mr-1" size={12} style={{ color: customFolders.find(f => f.name === b.folder)?.color || '#94a3b8' }} /> {b.folder || 'Unsorted'}
+                                                                </button>
                                                                 {(b.tags || []).map(tag => {
                                                                     const tO = customTags.find(t => t.name === tag);
-                                                                    return <span key={tag} className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate"><span className="font-black" style={{ color: tO?.color || '#64748b' }}>#</span>{tag}</span>;
+                                                                    return (
+                                                                        <button
+                                                                            key={tag}
+                                                                            onClick={(e) => {
+                                                                                e.stopPropagation();
+                                                                                selectTagFilter(tag);
+                                                                            }}
+                                                                            className="flex items-center gap-1 px-2 py-0.5 bg-slate-50 border border-slate-100 text-slate-500 rounded-lg text-[10px] font-semibold truncate hover:bg-slate-100 transition-colors"
+                                                                        >
+                                                                            <span className="font-black" style={{ color: tO?.color || '#64748b' }}>#</span>{tag}
+                                                                        </button>
+                                                                    );
                                                                 })}
                                                             </div>
                                                             <div className="flex items-center gap-2 shrink-0">
@@ -1482,52 +1566,130 @@ function App() {
                                     {focusedTweet.tweetText ? <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /> : (focusedTweet.url && focusedTweet.url.includes('reddit.com') ? <RedditEmbed url={focusedTweet.url} /> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />)}
                                 </div>
                             </div>
-                            <div className="w-full md:w-[350px] p-5 sm:p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar">
-                                <div>
-                                    <div className="flex justify-between items-start mb-6">
+                            <div className="w-full md:w-[350px] p-5 sm:p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar relative">
+                                <div onClick={() => { if (activeAddMenu) setActiveAddMenu(null); }}>
+                                    <div className="flex justify-between items-center mb-4 border-b border-slate-50 pb-3">
                                         <div>
-                                            <span className="px-3 py-1 bg-slate-100 text-[10px] font-bold uppercase tracking-widest text-slate-500 rounded-full flex items-center w-fit"><LucideIcon name="folder" className="mr-1.5" style={{ color: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }} /> {focusedTweet.folder || 'Unsorted'}</span>
-                                            {focusedTweet.date && <p className="text-[11px] text-slate-400 font-medium mt-2 ml-1"><LucideIcon name="calendar" className="mr-1.5" />{formatDate(focusedTweet.date)}</p>}
+                                            {focusedTweet.date && <span className="text-[11px] text-slate-400 font-medium flex items-center"><LucideIcon name="calendar" className="mr-1.5" size={12} />{formatDate(focusedTweet.date)}</span>}
                                         </div>
-                                        <div className="flex gap-2">{!isEditingFocus && <button onClick={startFocusEdit} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><LucideIcon name="pen" className="text-sm" /></button>}<button onClick={() => { setFocusedTweet(null); setIsEditingFocus(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><LucideIcon name="x" className="text-lg" /></button></div>
+                                        <div className="flex items-center gap-1.5">
+                                            {initialFocusedTweet && JSON.stringify({ ...initialFocusedTweet, date: null, timestamp: null }) !== JSON.stringify({ ...focusedTweet, date: null, timestamp: null }) && (
+                                                <button onClick={() => {
+                                                    setFocusedTweet(initialFocusedTweet);
+                                                    setBookmarks(prev => prev.map(b => b.id === initialFocusedTweet.id ? initialFocusedTweet : b));
+                                                }} className="w-8 h-8 flex items-center justify-center hover:bg-orange-50 text-orange-400 rounded-full transition-all" title="Revert Changes"><LucideIcon name="rotate-ccw" className="text-[16px]" /></button>
+                                            )}
+                                            <button onClick={() => { setFocusedTweet(null); setIsNoteEditing(false); }} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full transition-all text-slate-400"><LucideIcon name="x" className="text-xl" /></button>
+                                        </div>
                                     </div>
-                                    {isEditingFocus ? (
-                                        <div className="space-y-4 mb-8">
-                                            <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Your Note</label><textarea value={focusEditDesc} onChange={e => setFocusEditDesc(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-100 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-black" rows="4"></textarea></div>
-                                            <div>
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Folder</label>
-                                                <CustomDropdown
-                                                    value={focusEditFolder}
-                                                    onChange={setFocusEditFolder}
-                                                    options={[{ name: 'General', color: '#94a3b8' }, ...customFolders]}
-                                                    isMulti={false}
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Tags (comma separated)</label>
-                                                <CustomDropdown
-                                                    value={focusEditTags}
-                                                    onChange={setFocusEditTags}
-                                                    options={customTags}
-                                                    isMulti={true}
-                                                />
-                                            </div>
-                                            <div className="flex gap-2 pt-2"><button onClick={saveFocusEdit} className="flex-1 bg-green-600 text-white py-3 rounded-xl text-xs font-bold hover:bg-green-700 transition-all shadow-md shadow-green-600/20 active:scale-95">SAVE</button><button onClick={() => setIsEditingFocus(false)} className="flex-1 bg-slate-100 text-slate-600 py-3 rounded-xl text-xs font-bold hover:bg-slate-200 transition-all active:scale-95">CANCEL</button></div>
-                                        </div>
+
+                                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3>
+                                    {isNoteEditing ? (
+                                        <textarea
+                                            autoFocus
+                                            value={focusedTweet.description || ''}
+                                            onChange={e => {
+                                                const val = e.target.value;
+                                                const updated = { ...focusedTweet, description: val };
+                                                setFocusedTweet(updated);
+                                                setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
+                                            }}
+                                            onBlur={() => setIsNoteEditing(false)}
+                                            className="w-full p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none resize-none focus:ring-1 focus:ring-blue-400 mb-5"
+                                            rows="4"
+                                            placeholder="Empty note..."
+                                        />
                                     ) : (
-                                        <><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Your Note</h3><div className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-8"><p className="text-slate-800 font-medium leading-relaxed break-words">{focusedTweet.description || 'No note added for this tweet.'}</p></div><h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3><div className="flex flex-wrap gap-2 mb-8">{(focusedTweet.tags || []).length > 0 ? (focusedTweet.tags || []).map(tag => <span key={tag} className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-lg text-xs font-bold truncate max-w-[200px]"><span className="font-black" style={{ color: customTags.find(t => t.name === tag)?.color || '#64748b' }}>#</span>{tag}</span>) : <span className="text-slate-300 text-sm italic">No tags</span>}</div></>
+                                        <div onClick={(e) => { e.stopPropagation(); setIsNoteEditing(true); }} className="bg-slate-50 p-4 rounded-xl border border-slate-100 mb-5 cursor-text hover:bg-slate-100 hover:border-slate-200 transition-colors min-h-[80px]">
+                                            <p className="text-slate-800 font-medium leading-relaxed break-words whitespace-pre-wrap">{focusedTweet.description || <span className="text-slate-400 italic">No note added. Click to write...</span>}</p>
+                                        </div>
                                     )}
+
+                                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Folder</h3>
+                                    <div className="flex flex-wrap gap-2 mb-5 relative">
+                                        {focusedTweet.folder && focusedTweet.folder !== 'General' && focusedTweet.folder !== 'Unsorted' ? (
+                                            <div className="group flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 hover:text-red-500 transition-all border border-transparent hover:border-red-200" onClick={() => {
+                                                const updated = { ...focusedTweet, folder: 'Unsorted' };
+                                                setFocusedTweet(updated);
+                                                setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
+                                            }}>
+                                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: customFolders.find(f => f.name === focusedTweet.folder)?.color || '#94a3b8' }}></div>
+                                                <span>{focusedTweet.folder}</span>
+                                                <LucideIcon name="x" className="ml-1 opacity-0 group-hover:opacity-100 w-3 h-3" />
+                                            </div>
+                                        ) : (
+                                            <div className="relative dropdown-container">
+                                                <button onClick={(e) => { e.stopPropagation(); setActiveAddMenu(activeAddMenu === 'folder' ? null : 'folder'); }} className="w-8 h-8 flex items-center justify-center bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 transition-all"><LucideIcon name="plus" size={14} /></button>
+                                                {activeAddMenu === 'folder' && (
+                                                    <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 z-50 p-2 max-h-48 overflow-y-auto custom-scrollbar" onClick={(e) => e.stopPropagation()}>
+                                                        <div className="text-[10px] font-bold text-slate-400 uppercase px-2 mb-1 mt-1">Select Folder</div>
+                                                        {customFolders.length > 0 ? customFolders.map(f => (
+                                                            <div key={f.name} onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                const updated = { ...focusedTweet, folder: f.name };
+                                                                setFocusedTweet(updated);
+                                                                setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
+                                                                setActiveAddMenu(null);
+                                                            }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg cursor-pointer text-sm font-medium text-slate-700">
+                                                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }}></div>
+                                                                {f.name}
+                                                            </div>
+                                                        )) : <div className="px-3 py-2 text-xs text-slate-400 italic">No custom folders.</div>}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Tags</h3>
+                                    <div className="flex flex-wrap gap-2 mb-5 relative dropdown-container">
+                                        {(focusedTweet.tags || []).length > 0 && (focusedTweet.tags || []).map(tag => (
+                                            <div key={tag} className="group flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 text-slate-600 rounded-full text-xs font-bold cursor-pointer hover:bg-red-50 hover:text-red-500 transition-all border border-transparent hover:border-red-200" onClick={() => {
+                                                const newTags = (focusedTweet.tags || []).filter(t => t !== tag);
+                                                const updated = { ...focusedTweet, tags: newTags };
+                                                setFocusedTweet(updated);
+                                                setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
+                                            }}>
+                                                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: customTags.find(t => t.name === tag)?.color || '#64748b' }}></div>
+                                                <span>{tag}</span>
+                                                <LucideIcon name="x" className="ml-1 opacity-0 group-hover:opacity-100 w-3 h-3" />
+                                            </div>
+                                        ))}
+                                        <div className="relative dropdown-container">
+                                            <button onClick={(e) => { e.stopPropagation(); setActiveAddMenu(activeAddMenu === 'tag' ? null : 'tag'); }} className="w-8 h-8 flex items-center justify-center bg-slate-100 text-slate-500 rounded-full hover:bg-slate-200 transition-all"><LucideIcon name="plus" size={14} /></button>
+                                            {activeAddMenu === 'tag' && (
+                                                <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 z-50 p-2 max-h-48 overflow-y-auto custom-scrollbar" onClick={(e) => e.stopPropagation()}>
+                                                    <div className="text-[10px] font-bold text-slate-400 uppercase px-2 mb-1 mt-1 flex justify-between items-center">
+                                                        Select Tag
+                                                    </div>
+                                                    {customTags.filter(t => !(focusedTweet.tags || []).includes(t.name)).length > 0 ? customTags.filter(t => !(focusedTweet.tags || []).includes(t.name)).map(t => (
+                                                        <div key={t.id} onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            const newTags = [...(focusedTweet.tags || []), t.name];
+                                                            const updated = { ...focusedTweet, tags: newTags };
+                                                            setFocusedTweet(updated);
+                                                            setBookmarks(prev => prev.map(b => b.id === updated.id ? updated : b));
+                                                            setActiveAddMenu(null);
+                                                        }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-lg cursor-pointer text-sm font-medium text-slate-700">
+                                                            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: t.color }}></div>
+                                                            {t.name}
+                                                        </div>
+                                                    )) : <div className="px-3 py-2 text-xs text-slate-400 italic">No more tags</div>}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
-                                <div className="pt-6 border-t border-slate-50 flex items-center gap-3 mt-auto">
+                                <div className="pt-5 border-t border-slate-50 flex items-center gap-3 mt-auto">
                                     <button
                                         onClick={(e) => { handleMoveToTrash(e, focusedTweet.id); setFocusedTweet(null); }}
-                                        className="w-12 h-12 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95"
+                                        className="w-10 h-10 flex items-center justify-center bg-red-50 text-red-500 rounded-xl hover:bg-red-100 transition-all active:scale-95 shrink-0"
                                         title="Move to Trash"
                                     >
-                                        <LucideIcon name="trash-2" size={18} />
+                                        <LucideIcon name="trash-2" size={17} />
                                     </button>
-                                    <a href={focusedTweet.url} target="_blank" className="flex-1 flex items-center justify-center gap-2 bg-black text-white px-5 py-3.5 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">
-                                        {focusedTweet.url && focusedTweet.url.includes('reddit.com') ? 'OPEN ON REDDIT' : 'OPEN ON X'} <LucideIcon name="external-link" />
+                                    <a href={focusedTweet.url} target="_blank" className="flex-1 flex items-center justify-center gap-2 bg-black text-white px-4 py-3 rounded-xl text-xs font-bold shadow-lg hover:bg-slate-800 transition-all active:scale-95">
+                                        {focusedTweet.url && focusedTweet.url.includes('reddit.com') ? 'OPEN ON REDDIT' : 'OPEN ON X'} <LucideIcon name="external-link" size={14} />
                                     </a>
                                 </div>
                             </div>
