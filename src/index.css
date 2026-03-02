@@ -1,0 +1,317 @@
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: scale(0.98);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.spin-slow {
+    animation: spin 3s linear infinite;
+}
+
+/* Dark Mode System */
+:root {
+    --bg-main: #f8fafc;
+    --bg-card: #ffffff;
+    --text-bold: #000000;
+    --text-normal: #334155;
+    --text-muted: #64748b;
+    --border: #e2e8f0;
+    --sidebar-bg: #ffffff;
+    --header-bg: rgba(255, 255, 255, 0.82);
+    --accent: #3b82f6;
+}
+
+
+
+.theme-dark {
+    --bg-main: #000000;
+    --bg-card: #16181c;
+    --text-bold: #ffffff;
+    --text-normal: #e7e9ea;
+    --text-muted: #71767b;
+    --border: #2f3336;
+    --sidebar-bg: #000000;
+    --header-bg: rgba(0, 0, 0, 0.85);
+}
+
+.theme-oldschool {
+    --bg-main: #15202b;
+    --bg-card: #1b2836;
+    --text-bold: #ffffff;
+    --text-normal: #cbd5e1;
+    --text-muted: #8899a6;
+    --border: #243447;
+    --sidebar-bg: #15202b;
+    --header-bg: rgba(21, 32, 43, 0.85);
+}
+
+/* Global Theme Overrides */
+[class*="theme-"]:not(.theme-light) {
+    background-color: var(--bg-main) !important;
+    color: var(--text-normal) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .bg-white,
+[class*="theme-"]:not(.theme-light) .bg-white\/80 {
+    background-color: var(--bg-card) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .bg-slate-50,
+[class*="theme-"]:not(.theme-light) .bg-slate-50\/50 {
+    background-color: var(--bg-main) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .bg-slate-100,
+[class*="theme-"]:not(.theme-light) .bg-slate-50 {
+    background-color: var(--bg-main) !important;
+}
+
+/* Fix for icons and text */
+[class*="theme-"]:not(.theme-light) .text-slate-900,
+[class*="theme-"]:not(.theme-light) .text-slate-800,
+[class*="theme-"]:not(.theme-light) .text-black {
+    color: var(--text-bold) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .text-slate-700,
+[class*="theme-"]:not(.theme-light) .text-slate-600 {
+    color: var(--text-normal) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .text-slate-500,
+[class*="theme-"]:not(.theme-light) .text-slate-400 {
+    color: var(--text-muted) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .border-slate-200,
+[class*="theme-"]:not(.theme-light) .border-slate-100,
+[class*="theme-"]:not(.theme-light) .border-gray-50 {
+    border-color: var(--border) !important;
+}
+
+[class*="theme-"]:not(.theme-light) .bg-slate-100 {
+    background-color: var(--border) !important;
+    opacity: 0.5;
+}
+
+/* Fix for hover states in dark themes */
+[class*="theme-"]:not(.theme-light) .hover\:bg-slate-50:hover,
+[class*="theme-"]:not(.theme-light) .hover\:bg-slate-100:hover {
+    background-color: var(--border) !important;
+    opacity: 1;
+}
+
+[class*="theme-"]:not(.theme-light) .shadow-sm,
+[class*="theme-"]:not(.theme-light) .shadow-md {
+    box-shadow: none !important;
+    border: 1px solid var(--border) !important;
+}
+
+[class*="theme-"]:not(.theme-light),
+[class*="theme-"]:not(.theme-light) * {
+    transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease !important;
+}
+
+/* Ensure backdrop blur headers work in dark themes */
+[class*="theme-"]:not(.theme-light) .bg-white\/80 {
+    background-color: var(--header-bg) !important;
+}
+
+.modal-enter {
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(100px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.animate-slide-in-right {
+    animation: slideInRight 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-100%);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+.animate-slide-in-left {
+    animation: slideInLeft 0.3s ease-out;
+}
+
+.break-inside-avoid {
+    break-inside: avoid;
+}
+
+.drag-over-active {
+    background-color: #f1f5f9 !important;
+    border-color: #3b82f6 !important;
+    border-style: dashed !important;
+    border-width: 2px !important;
+}
+
+.tag-header:hover {
+    background-color: rgba(0, 0, 0, 0.02);
+    border-radius: 8px;
+}
+
+/* Custom Dropdown For Site */
+.tm-input-wrapper {
+    position: relative;
+    display: block;
+}
+
+.tm-dropdown-arrow {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    color: #94a3b8;
+    display: flex;
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.tm-input-wrapper.open .tm-dropdown-arrow {
+    transform: translateY(-50%) rotate(180deg);
+    color: #3b82f6;
+}
+
+.tm-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    width: 100%;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--bg-card);
+    backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    z-index: 50;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-10px) scale(0.98);
+    transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transform-origin: top center;
+}
+
+.tm-dropdown-menu.show {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+}
+
+.tm-dropdown-menu::-webkit-scrollbar {
+    width: 6px;
+}
+
+.tm-dropdown-menu::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 10px;
+}
+
+.tm-dropdown-menu::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.tm-dropdown-item {
+    padding: 12px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-normal);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: all 0.2s ease;
+    border-bottom: 1px solid var(--border);
+}
+
+.tm-dropdown-item:last-child {
+    border-bottom: none;
+}
+
+.tm-dropdown-item:hover,
+.tm-dropdown-item.selected {
+    background: rgba(59, 130, 246, 0.08);
+    color: #3b82f6;
+    padding-left: 20px;
+}
+
+.tm-dropdown-checkbox {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 2px solid #cbd5e1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    background: transparent;
+}
+
+.tm-dropdown-item.selected .tm-dropdown-checkbox {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15);
+    transform: scale(1.1);
+}
+
+.tm-dropdown-item.selected .tm-dropdown-checkbox::after {
+    content: '';
+    width: 5px;
+    height: 10px;
+    border: solid white;
+    border-width: 0 2.5px 2.5px 0;
+    transform: rotate(45deg);
+    margin-bottom: 2px;
+}
