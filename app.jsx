@@ -1271,16 +1271,6 @@ function App() {
 
 
     // --- RENDER HELPERS ---
-    const getFolderAndDescendants = useCallback((folderId, list) => {
-        const folder = list.find(f => f.id === folderId);
-        if (!folder) return [];
-        let names = [folder.name];
-        list.filter(f => f.parentId === folderId).forEach(c => {
-            names = names.concat(getFolderAndDescendants(c.id, list));
-        });
-        return names.filter(Boolean);
-    }, []);
-
     const topLevelFolders = useMemo(() => customFolders.filter(f => !f.parentId), [customFolders]);
 
     const folderCounts = useMemo(() => {
@@ -1290,36 +1280,9 @@ function App() {
             directCounts[fName] = (directCounts[fName] || 0) + 1;
         });
 
-        const childrenMap = {};
-        const folderById = {};
-        customFolders.forEach(f => {
-            folderById[f.id] = f;
-            childrenMap[f.id] = [];
-        });
-
-        customFolders.forEach(f => {
-            if (f.parentId && childrenMap[f.parentId]) {
-                childrenMap[f.parentId].push(f.id);
-            }
-        });
-
         const counts = {};
-        const getCount = (fId) => {
-            if (counts[fId] !== undefined) return counts[fId];
-            const folder = folderById[fId];
-            if (!folder) return 0;
-            let total = directCounts[folder.name] || 0;
-            if (childrenMap[fId]) {
-                childrenMap[fId].forEach(childId => {
-                    total += getCount(childId);
-                });
-            }
-            counts[fId] = total;
-            return total;
-        };
-
         customFolders.forEach(f => {
-            counts[f.id] = getCount(f.id);
+            counts[f.id] = directCounts[f.name] || 0;
         });
         return counts;
     }, [bookmarks, customFolders]);
@@ -1334,16 +1297,8 @@ function App() {
         return ObjectCounts;
     }, [bookmarks]);
 
-    const getCumulativeCount = (fId) => folderCounts[fId] || 0;
+    const getFolderCount = (fId) => folderCounts[fId] || 0;
     const unsortedCount = useMemo(() => bookmarks.filter(b => isUnsortedFolder(b.folder)).length, [bookmarks]);
-
-    const folderDescendantsMap = useMemo(() => {
-        const map = {};
-        customFolders.forEach(f => {
-            map[f.name] = getFolderAndDescendants(f.id, customFolders);
-        });
-        return map;
-    }, [customFolders, getFolderAndDescendants]);
 
     const filteredBookmarks = useMemo(() => {
         const source = activeFilters.includes('Trash') ? trash : bookmarks;
@@ -1358,12 +1313,11 @@ function App() {
             });
 
             // Folder logic: MUST match ANY selected folder or special view (Union)
-            // If no specific folder filter is active (only tags), we allow all folders
             const matchFolders = folderFilters.length === 0 || folderFilters.some(filter => {
                 if (filter === 'All' || filter === 'AllTags' || filter === 'Trash') return true;
                 if (filter === 'Unsorted') return isUnsortedFolder(b.folder);
                 const normalized = normalizeFolder(b.folder);
-                return folderDescendantsMap[filter] ? folderDescendantsMap[filter].includes(normalized) : (normalized === filter);
+                return normalized === filter;
             });
 
             const mF = matchTags && matchFolders;
@@ -1420,7 +1374,7 @@ function App() {
                 >
                     <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-5 h-5 ml-1 flex items-center justify-center ${children.length === 0 ? 'invisible' : ''}`}><LucideIcon name={isExpanded ? "chevron-down" : "chevron-right"} size={12} /></button>
                     <button onClick={() => toggleFilter(folder.name)} className="flex-1 flex items-center gap-2.5 text-[15px] font-bold truncate py-1.5 pl-1 text-left"><LucideIcon name="folder" className="text-[14px]" style={{ color: isActive ? '#fff' : folder.color }} /> <span>{folder.name}</span></button>
-                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60 group-hover:hidden">{getCumulativeCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[11px]" /></button></div>
+                    <div className="flex items-center w-8 justify-center pr-2 shrink-0"><span className="text-[11px] font-black opacity-60 group-hover:hidden">{getFolderCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[11px]" /></button></div>
                 </div>
                 {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
             </div>
