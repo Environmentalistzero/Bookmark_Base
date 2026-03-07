@@ -895,7 +895,6 @@ function App() {
                     tags: customTags
                 });
             }
-            return true;
         };
 
         if (window.chrome && chrome.runtime && chrome.runtime.onMessageExternal) {
@@ -921,8 +920,14 @@ function App() {
                     if (pendingBookmarks && pendingBookmarks.length > 0) {
                         setBookmarks(prev => {
                             const existingTweetIds = new Set(prev.map(b => b.tweetId));
+                            const seenPendingTweetIds = new Set();
                             const uniquePending = pendingBookmarks
-                                .filter(b => !existingTweetIds.has(String(b.tweetId)))
+                                .filter(b => {
+                                    const tid = String(b.tweetId);
+                                    if (existingTweetIds.has(tid) || seenPendingTweetIds.has(tid)) return false;
+                                    seenPendingTweetIds.add(tid);
+                                    return true;
+                                })
                                 .map(b => ({ ...b, folder: normalizeFolder(b.folder) }));
                             return uniquePending.length > 0 ? [...uniquePending, ...prev] : prev;
                         });
@@ -1777,7 +1782,7 @@ function App() {
                                         <div key={colIdx} className="flex-1 flex flex-col gap-3 sm:gap-6 min-w-0">
                                             {col.map(b => (
                                                 <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (!activeFilters.includes('Trash')) { setFocusedTweet(b); setInitialFocusedTweet(b); setIsNoteEditing(false); } }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFilters.includes('Trash') ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
-                                                    <div className="w-full">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
+                                                    <div className="w-full">{b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <CustomTweetCard bookmark={b} onImageClick={handleImageClick} />}</div>
 
                                                     <div className="mt-4 space-y-3">
                                                         {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
@@ -1842,7 +1847,7 @@ function App() {
                         <div className="bg-white w-full max-w-5xl rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
                             <div className="flex-1 bg-slate-100 p-4 sm:p-8 md:p-12 lg:p-16 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[200px] sm:min-h-[400px]">
                                 <div className="w-full max-w-lg bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-5">
-                                    {focusedTweet.tweetText ? <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /> : (focusedTweet.url && focusedTweet.url.includes('reddit.com') ? <RedditEmbed url={focusedTweet.url} /> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />)}
+                                    {focusedTweet.url && focusedTweet.url.includes('reddit.com') ? <RedditEmbed url={focusedTweet.url} /> : <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} />}
                                 </div>
                             </div>
                             <div className="w-full md:w-[350px] p-5 sm:p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar relative">

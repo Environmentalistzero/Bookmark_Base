@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import Hls from "hls.js";
 import {
     Play,
     ChevronDown,
@@ -47,7 +48,8 @@ import {
     Inbox,
     Layers,
     Loader2,
-    AlertTriangle
+    AlertTriangle,
+    Pin
 } from 'lucide-react';
 import Dexie from 'dexie';
 import firebase from 'firebase/compat/app';
@@ -102,7 +104,8 @@ const ICON_MAP = {
     'inbox': Inbox,
     'layers': Layers,
     'loader': Loader2,
-    'alert-triangle': AlertTriangle
+    'alert-triangle': AlertTriangle,
+    'pin': Pin
 };
 
 const LucideIcon = ({ name, className = '', style = {}, size, strokeWidth = 2 }) => {
@@ -171,7 +174,7 @@ const extractHandle = (url) => {
 
 const getHighResUrl = (url) => {
     if (!url) return '';
-    const isVideoFile = String(url).match(/\.(mp4|webm|ogg|m3u8)|video\.twimg\.com|v\.redd\.it|ext_tw_video/i);
+    const isVideoFile = String(url).match(/\.(mp4|webm|ogg|m3u8)|video\.twimg\.com|v\.redd\.it|ext_tw_video|amplify_video/i);
     if (isVideoFile) return url;
     if (url.includes('name=')) return url.replace(/name=[a-zA-Z0-9_]+/, 'name=orig') + '#.jpg';
     if (url.includes('pbs.twimg.com')) return url + (url.includes('?') ? '&' : '?') + 'name=orig' + '#.jpg';
@@ -191,35 +194,147 @@ const handleDownload = async (url) => {
 
 const HlsVideoPlayer = ({ src, poster, className, controls, autoPlay, muted, ...rest }) => {
     const videoRef = useRef(null);
+
     useEffect(() => {
         const video = videoRef.current;
         if (!video || !src) return;
+
         let hls;
-        if (src.includes('.m3u8')) {
-            import('hls.js').then((pkg) => {
-                const Hls = pkg.default || pkg;
-                if (Hls.isSupported()) {
-                    hls = new Hls();
-                    hls.loadSource(src);
-                    hls.attachMedia(video);
-                    if (autoPlay) hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => { }));
-                } else { video.src = src; if (autoPlay) video.play().catch(() => { }); }
+        let hasCleanedUp = false;
+        let networkRetries = 0;
+        let mediaRetries = 0;
+        const source = getHighResUrl(src);
+
+        const useHlsJs = source.includes('.m3u8') && Hls.isSupported();
+        const useNativeHls = video.canPlayType('application/vnd.apple.mpegurl');
+
+        // Tarayıcı kısıtlamalarını aşmak için sesi DOM seviyesinde kapatıyoruz
+        if (autoPlay) {
+            video.defaultMuted = true;
+            video.muted = true;
+        }
+
+        const tryPlay = async () => {
+            if (!autoPlay || hasCleanedUp) return;
+            try {
+                // Async/Await ile oynatmanın başarılı olup olmadığını kesin olarak yakalıyoruz
+                await video.play();
+            } catch (err) {
+                console.warn("Oynatma engellendi, sessiz başlatma deneniyor:", err);
+                // Autoplay engeli yediysek, kesinlikle sessize alıp tekrar deniyoruz (Fallback)
+                video.muted = true;
+                video.play().catch(e => console.error("Sessiz oynatma da başarısız:", e));
+            }
+        };
+
+        const loadDirect = (url) => {
+            if (!url || hasCleanedUp) return;
+            video.src = url;
+            video.load();
+
+            // Cache Çözümü: Meta veriler zaten yüklendiyse eventi beklemeden oynat
+            if (video.readyState >= 1) { // HAVE_METADATA
+                tryPlay();
+            } else {
+                video.addEventListener('loadedmetadata', tryPlay, { once: true });
+            }
+        };
+
+        if (useHlsJs) {
+            hls = new Hls({ enableWorker: true });
+            hls.attachMedia(video);
+
+            hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+                hls.loadSource(source);
             });
-        } else { video.src = src; if (autoPlay) video.play().catch(() => { }); }
-        return () => hls && hls.destroy();
+
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                tryPlay();
+            });
+
+            hls.on(Hls.Events.ERROR, (event, data) => {
+                if (data.fatal) {
+                    switch (data.type) {
+                        case Hls.ErrorTypes.NETWORK_ERROR:
+                            if (networkRetries < 2) {
+                                networkRetries += 1;
+                                hls.startLoad();
+                            } else {
+                                hls.destroy(); hls = null; loadDirect(source);
+                            }
+                            break;
+                        case Hls.ErrorTypes.MEDIA_ERROR:
+                            if (mediaRetries < 2) {
+                                mediaRetries += 1;
+                                hls.recoverMediaError();
+                            } else {
+                                hls.destroy(); hls = null; loadDirect(source);
+                            }
+                            break;
+                        default:
+                            hls.destroy(); hls = null; loadDirect(source);
+                            break;
+                    }
+                }
+            });
+        } else if (useNativeHls && source.includes('.m3u8')) {
+            loadDirect(source);
+        } else {
+            loadDirect(source);
+        }
+
+        return () => {
+            hasCleanedUp = true;
+            if (hls) hls.destroy();
+            // Component unmount olduğunda video tagini güvenli bir şekilde temizle
+            if (videoRef.current) {
+                videoRef.current.pause();
+                videoRef.current.removeAttribute('src');
+                videoRef.current.load();
+            }
+        };
     }, [src, autoPlay]);
-    return <video ref={videoRef} className={className} controls={controls} muted={muted} poster={poster} playsInline preload="metadata" {...rest} />;
+
+    return (
+        <video
+            ref={videoRef}
+            className={className}
+            controls={controls}
+            poster={poster}
+            playsInline
+            preload="auto"
+            // muted={...} React prop kilidini kaldırdık, işlemi yukarıda DOM üzerinden yapıyoruz
+            {...rest}
+        />
+    );
 };
 
 const TweetEmbed = ({ tweetId }) => {
     const containerRef = useRef(null);
+    const [isLoaded, setIsLoaded] = useState(!!window.twttr);
+
     useEffect(() => {
-        if (window.twttr && tweetId && containerRef.current) {
+        if (window.twttr) {
+            setIsLoaded(true);
+            return;
+        }
+        const interval = setInterval(() => {
+            if (window.twttr) {
+                setIsLoaded(true);
+                clearInterval(interval);
+            }
+        }, 100);
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        if (isLoaded && window.twttr && tweetId && containerRef.current) {
             containerRef.current.innerHTML = '';
             window.twttr.widgets.createTweet(tweetId, containerRef.current, { theme: 'light', align: 'center', dnt: true });
         }
-    }, [tweetId]);
-    return <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center bg-slate-50 rounded-xl" />;
+    }, [isLoaded, tweetId]);
+
+    return <div ref={containerRef} className="w-full min-h-[150px] flex items-center justify-center bg-white rounded-xl overflow-hidden" />;
 };
 
 const RedditEmbed = React.memo(({ url }) => {
@@ -266,19 +381,55 @@ const renderFormattedText = (text) => {
     });
 };
 
-const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
+const isPlayableVideoUrl = (url) => {
+    if (!url || typeof url !== 'string' || url.startsWith('blob:')) return false;
+    return /(\.mp4|\.webm|\.ogg|\.m3u8|video\.twimg\.com|v\.redd\.it|ext_tw_video|amplify_video)/i.test(url);
+};
+
+const getVideoPriority = (url) => {
+    const val = String(url || '').toLowerCase();
+    if (/\.(mp4|webm|ogg)(\?|$)/i.test(val)) return 3;
+    if (/amplify_video|ext_tw_video|video\.twimg\.com|v\.redd\.it/i.test(val)) return 2;
+    if (/\.m3u8(\?|$)/i.test(val)) return 1;
+    return 0;
+};
+
+const getBestVideoIndex = (medias) => {
+    if (!Array.isArray(medias) || medias.length === 0) return -1;
+    let bestIdx = -1;
+    let bestPriority = -1;
+    medias.forEach((url, idx) => {
+        if (!isPlayableVideoUrl(url)) return;
+        const p = getVideoPriority(url);
+        if (p > bestPriority) {
+            bestPriority = p;
+            bestIdx = idx;
+        }
+    });
+    return bestIdx;
+};
+
+const CustomTweetCard = React.memo(({ bookmark, onImageClick, showFullRedditContent = true }) => {
     const handle = bookmark.authorHandle || extractHandle(bookmark.url);
     const name = bookmark.authorName || handle;
     const avatar = bookmark.profileImg || (bookmark.url && bookmark.url.includes('reddit.com') ? 'https://www.redditstatic.com/avatars/defaults/v2/avatar_default_1.png' : 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png');
-    const isVideoFile = (url) => String(url).match(/\.(mp4|webm|ogg|m3u8)|video\.twimg\.com|v\.redd\.it|ext_tw_video/i);
+
     const medias = bookmark.mediaUrls ? String(bookmark.mediaUrls).split(',').filter(Boolean) : [];
-    const videoIdx = medias.findIndex(m => isVideoFile(m));
+    const videoIdx = getBestVideoIndex(medias);
     const isVideo = bookmark.mediaType === 'video' || videoIdx !== -1;
     const isReddit = bookmark.url && bookmark.url.includes('reddit.com');
 
-    // Determine the best poster and video URL
     const videoUrl = videoIdx !== -1 ? medias[videoIdx] : (isVideo ? medias[0] : null);
-    const posterUrl = bookmark.posterUrl || (medias.find(m => !isVideoFile(m)) || medias[0]);
+    const posterUrl = bookmark.posterUrl || (medias.find(m => !isPlayableVideoUrl(m)) || medias[0]);
+    const tweetId = extractTweetId(bookmark.url);
+
+    const rawText = String(bookmark.tweetText || '');
+    const redditTitle = isReddit
+        ? (rawText.split(/\n{2,}/)[0] || '').trim()
+        : '';
+    const displayText = isReddit
+        ? (showFullRedditContent ? rawText : redditTitle)
+        : rawText;
 
     return (
         <div className="text-left w-full">
@@ -292,7 +443,7 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                 </div>
             </div>
             <p className="text-slate-800 text-[17px] leading-relaxed whitespace-pre-wrap mb-3 px-1 break-words overflow-hidden">
-                {renderFormattedText(bookmark.tweetText)}
+                {renderFormattedText(displayText)}
             </p>
             {medias.length > 0 && (
                 <div className={`rounded-2xl overflow-hidden border border-slate-100 bg-transparent ${medias.length > 1 && !isVideo ? 'grid grid-cols-2 gap-1 aspect-square md:aspect-video' : ''}`}>
@@ -306,7 +457,7 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                                 e.preventDefault();
                                 e.stopPropagation();
                                 const idx = videoIdx !== -1 ? videoIdx : 0;
-                                onImageClick(medias, idx, 'video', posterUrl);
+                                onImageClick(medias, idx, 'video', posterUrl, tweetId, isReddit);
                             }}
                         >
                             <img src={posterUrl} className="w-full h-full object-cover opacity-80" alt="Video Preview" />
@@ -329,7 +480,7 @@ const CustomTweetCard = React.memo(({ bookmark, onImageClick }) => {
                                     onClick={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
-                                        onImageClick(medias, idx, 'image');
+                                        onImageClick(medias, idx, 'image', null, tweetId, isReddit);
                                     }}
                                 >
                                     <img src={url} alt="Media" className={`${itemClass} pointer-events-none`} />
@@ -525,8 +676,8 @@ function App() {
         setActiveFilters(prev => {
             if (filter === 'Trash') return ['Trash'];
             if (filter === 'All') return ['All'];
-            if (filter === 'AllTags') return ['AllTags'];
-            if (filter === 'AllFolders') return ['AllFolders'];
+            if (filter === 'AllTags') return prev.includes('AllTags') ? ['All'] : ['AllTags'];
+            if (filter === 'AllFolders') return prev.includes('AllFolders') ? ['All'] : ['AllFolders'];
 
             if (!isMulti) return [filter];
 
@@ -548,6 +699,7 @@ function App() {
     const [focusedTweet, setFocusedTweet] = useState(null);
     const [previewState, setPreviewState] = useState(null);
     const [expandedFolders, setExpandedFolders] = useState([]);
+    const [folderDropTarget, setFolderDropTarget] = useState(null); // { id: string, position: 'before' | 'after' | 'inside' }
     const [storageInfo, setStorageInfo] = useState({ used: 0, quota: 0 });
 
     useEffect(() => {
@@ -754,13 +906,23 @@ function App() {
                 };
 
                 const applyDiff = async (collectionName, currentItems, prevItems) => {
+                    // Helper to remove undefined values which Firebase doesn't allow
+                    const cleanItem = (obj) => {
+                        try {
+                            return JSON.parse(JSON.stringify(obj));
+                        } catch (e) {
+                            console.error("CleanItem error:", e);
+                            return obj;
+                        }
+                    };
+
                     if (!prevItems) {
                         for (const item of currentItems) {
                             const itemId = item.id || item.name;
-                            if (itemId == null) continue; // Skip items without valid IDs
+                            if (itemId == null) continue;
                             const id = String(itemId);
                             const ref = fdb.collection('users').doc(uid).collection(collectionName).doc(id);
-                            batch.set(ref, item);
+                            batch.set(ref, cleanItem(item));
                             opsCount++;
                             if (opsCount >= 490) await commitBatch();
                         }
@@ -773,10 +935,9 @@ function App() {
                     for (const [id, item] of currMap.entries()) {
                         if (id === "undefined" || id === "null") continue;
                         const prevItem = prevMap.get(id);
-                        // Shallow check is much faster than JSON.stringify, O(n * props)
                         if (!prevItem || !isItemEqual(prevItem, item)) {
                             const ref = fdb.collection('users').doc(uid).collection(collectionName).doc(id);
-                            batch.set(ref, item);
+                            batch.set(ref, cleanItem(item));
                             opsCount++;
                             if (opsCount >= 490) await commitBatch();
                         }
@@ -837,7 +998,35 @@ function App() {
     };
 
     const [dragOverFolderId, setDragOverFolderId] = useState(null);
+    const [dragOverTagId, setDragOverTagId] = useState(null);
     const dragItemRef = useRef(null);
+    const folderDropRef = useRef(null); // Sürükleme konumu için logic ref
+
+    const clearDragState = React.useCallback(() => {
+        setDragOverFolderId(null);
+        setDragOverTagId(null);
+        setFolderDropTarget(null);
+        folderDropRef.current = null;
+        dragItemRef.current = null;
+    }, []);
+
+    const handleTagDrop = (e, tagName) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const dragData = dragItemRef.current;
+        if (!dragData || dragData.type !== 'tweet') {
+            clearDragState();
+            return;
+        }
+
+        setBookmarks(prev => prev.map(b => {
+            if (!dragData.ids.includes(b.id)) return b;
+            const currentTags = Array.isArray(b.tags) ? b.tags : [];
+            if (currentTags.includes(tagName)) return b;
+            return { ...b, tags: [...currentTags, tagName] };
+        }));
+        clearDragState();
+    };
 
     // Debounce Search 
     const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
@@ -846,9 +1035,23 @@ function App() {
     const [visibleCount, setVisibleCount] = useState(20);
     const observerTarget = useRef(null);
 
+    useEffect(() => {
+        const handleGlobalDragEnd = () => clearDragState();
+        window.addEventListener('dragend', handleGlobalDragEnd);
+        return () => window.removeEventListener('dragend', handleGlobalDragEnd);
+    }, [clearDragState]);
+
     // Callbacks
-    const handleImageClick = React.useCallback((medias, idx, type, poster) => {
-        setPreviewState({ medias, currentIndex: idx, mediaType: type, poster });
+    const handleImageClick = React.useCallback((medias, idx, type, poster, tweetId, isReddit = false) => {
+        if (type === 'video') {
+            const playableMedias = (medias || []).filter(isPlayableVideoUrl);
+            const nextMedias = playableMedias.length > 0 ? playableMedias : (medias || []);
+            const selected = (medias || [])[idx];
+            const normalizedIdx = Math.max(0, nextMedias.indexOf(selected));
+            setPreviewState({ medias: nextMedias, currentIndex: normalizedIdx, mediaType: type, poster, tweetId, isReddit });
+            return;
+        }
+        setPreviewState({ medias, currentIndex: idx, mediaType: type, poster, tweetId, isReddit });
     }, []);
 
     const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -1009,7 +1212,6 @@ function App() {
                     tags: customTags
                 });
             }
-            return true;
         };
 
         if (window.chrome && chrome.runtime && chrome.runtime.onMessageExternal) {
@@ -1035,9 +1237,19 @@ function App() {
                     if (pendingBookmarks && pendingBookmarks.length > 0) {
                         setBookmarks(prev => {
                             const existingTweetIds = new Set(prev.map(b => b.tweetId));
+                            const seenPendingTweetIds = new Set();
                             const uniquePending = pendingBookmarks
-                                .filter(b => !existingTweetIds.has(String(b.tweetId)))
-                                .map(b => ({ ...b, folder: normalizeFolder(b.folder) }));
+                                .filter(b => {
+                                    const tid = String(b.tweetId);
+                                    if (existingTweetIds.has(tid) || seenPendingTweetIds.has(tid)) return false;
+                                    seenPendingTweetIds.add(tid);
+                                    return true;
+                                })
+                                .map(b => ({
+                                    ...b,
+                                    folder: normalizeFolder(b.folder),
+                                    timestamp: b.timestamp || Date.now() // Eksikse şu anki zamanı ata
+                                }));
                             return uniquePending.length > 0 ? [...uniquePending, ...prev] : prev;
                         });
                         localStorage.removeItem('pending_twitter_sync');
@@ -1137,15 +1349,6 @@ function App() {
     }, [activeFilters, debouncedSearchQuery, gridCols]);
 
     useEffect(() => {
-        const observer = new IntersectionObserver(
-            entries => { if (entries[0].isIntersecting) setVisibleCount(prev => prev + 20); },
-            { threshold: 0.1 }
-        );
-        if (observerTarget.current) observer.observe(observerTarget.current);
-        return () => observer.disconnect();
-    }, []);
-
-    useEffect(() => {
         if (!window.twttr) {
             const script = document.createElement("script");
             script.src = "https://platform.twitter.com/widgets.js";
@@ -1203,6 +1406,12 @@ function App() {
         const file = event.target.files[0];
         if (!file) return;
 
+        // Perform confirmation before overwriting everything
+        if (!window.confirm("Bu işlem mevcut tüm verilerinizi silecek ve yedek dosyasındaki verileri yükleyecektir. Emin misiniz?")) {
+            event.target.value = null;
+            return;
+        }
+
         // Prevent importing if it exceeds 100MB Limit
         if (file.size + storageInfo.used >= 100 * 1024 * 1024) {
             showToast('Archive Limit (100 MB) reached. Please delete some items first.', 'error');
@@ -1214,34 +1423,111 @@ function App() {
         reader.onload = (e) => {
             try {
                 const data = JSON.parse(e.target.result);
-                let valid = true;
-
-                // Minimal structure validation
-                if (data.bookmarks && !Array.isArray(data.bookmarks)) valid = false;
-                if (data.customFolders && !Array.isArray(data.customFolders)) valid = false;
-                if (data.customTags && !Array.isArray(data.customTags)) valid = false;
-                if (data.trash && !Array.isArray(data.trash)) valid = false;
-
-                // Validate individual bookmark objects minimally (e.g. they should have 'id' and 'tweetId')
-                if (data.bookmarks && valid) {
-                    const hasInvalidBookmark = data.bookmarks.some(b => typeof b !== 'object' || !b.id || !b.tweetId);
-                    if (hasInvalidBookmark) valid = false;
-                }
-
-                if (!valid) {
+                if (!data || typeof data !== 'object') {
                     showToast('Invalid or corrupted JSON file. Operation cancelled.', 'error');
+                    event.target.value = null;
                     return;
                 }
 
-                if (data.bookmarks && Array.isArray(data.bookmarks)) setBookmarks(data.bookmarks);
-                if (data.customFolders && Array.isArray(data.customFolders)) setCustomFolders(data.customFolders);
-                if (data.customTags && Array.isArray(data.customTags)) setCustomTags(data.customTags);
-                if (data.trash && Array.isArray(data.trash)) setTrash(data.trash);
+                const rawBookmarks = Array.isArray(data.bookmarks) ? data.bookmarks : [];
+                const rawFolders = Array.isArray(data.customFolders) ? data.customFolders : (Array.isArray(data.folders) ? data.folders : []);
+                const rawTags = Array.isArray(data.customTags) ? data.customTags : (Array.isArray(data.tags) ? data.tags : []);
+                const rawTrash = Array.isArray(data.trash) ? data.trash : [];
+
+                const normalizeTagList = (value) => {
+                    if (!Array.isArray(value)) return [];
+                    return [...new Set(value
+                        .map(t => String(t || '').trim().toLowerCase())
+                        .filter(Boolean))];
+                };
+
+                const normalizeMediaUrls = (value) => {
+                    const arr = Array.isArray(value)
+                        ? value
+                        : (typeof value === 'string' ? value.split(',') : []);
+                    return [...new Set(arr.map(u => String(u || '').trim()).filter(Boolean))];
+                };
+
+                const normalizeBookmark = (item, idx, isTrashItem = false) => {
+                    if (!item || typeof item !== 'object') return null;
+                    const url = String(item.url || '').trim();
+                    const id = item.id != null ? String(item.id) : `imp_${Date.now()}_${idx}`;
+                    const derivedTweetId = item.tweetId != null ? String(item.tweetId) : (extractTweetId(url) || id);
+                    if (!derivedTweetId) return null;
+
+                    const medias = normalizeMediaUrls(item.mediaUrls);
+                    const hasPlayableVideo = medias.some(isPlayableVideoUrl);
+
+                    return {
+                        ...item,
+                        id,
+                        tweetId: derivedTweetId,
+                        url,
+                        folder: normalizeFolder(item.folder),
+                        tags: normalizeTagList(item.tags),
+                        description: typeof item.description === 'string' ? item.description : '',
+                        mediaUrls: medias.join(','),
+                        mediaType: item.mediaType === 'video' ? 'video' : 'image',
+                        hasPlayableVideo: hasPlayableVideo,
+                        posterUrl: typeof item.posterUrl === 'string' ? item.posterUrl : '',
+                        ...(isTrashItem ? { deletedAt: (Number(item.deletedAt) || Date.now()) } : (item.deletedAt ? { deletedAt: item.deletedAt } : {}))
+                    };
+                };
+
+                const normalizedBookmarks = rawBookmarks
+                    .map((b, idx) => normalizeBookmark(b, idx, false))
+                    .filter(Boolean);
+
+                const normalizedTrash = rawTrash
+                    .map((t, idx) => normalizeBookmark(t, idx, true))
+                    .filter(Boolean);
+
+                const seenFolderNames = new Set();
+                const normalizedFolders = rawFolders
+                    .filter(f => f && typeof f === 'object')
+                    .map((f, idx) => ({
+                        id: f.id != null ? String(f.id) : `f_imp_${Date.now()}_${idx}`,
+                        name: String(f.name || '').trim(),
+                        color: typeof f.color === 'string' && f.color ? f.color : '#3b82f6',
+                        parentId: f.parentId != null ? String(f.parentId) : null,
+                        isPinned: !!f.isPinned,
+                        order: f.order != null ? Number(f.order) : idx
+                    }))
+                    .filter(f => {
+                        if (!f.name) return false;
+                        const key = f.name.toLowerCase();
+                        if (seenFolderNames.has(key)) return false;
+                        seenFolderNames.add(key);
+                        return true;
+                    });
+
+                const seenTagNames = new Set();
+                const normalizedTags = rawTags
+                    .filter(t => t && typeof t === 'object')
+                    .map((t, idx) => ({
+                        id: t.id != null ? String(t.id) : `t_imp_${Date.now()}_${idx}`,
+                        name: String(t.name || '').trim().toLowerCase(),
+                        color: typeof t.color === 'string' && t.color ? t.color : '#64748b',
+                        isPinned: !!t.isPinned
+                    }))
+                    .filter(t => {
+                        if (!t.name) return false;
+                        if (seenTagNames.has(t.name)) return false;
+                        seenTagNames.add(t.name);
+                        return true;
+                    });
+
+                setBookmarks(normalizedBookmarks);
+                setCustomFolders(normalizedFolders);
+                setCustomTags(normalizedTags);
+                setTrash(normalizedTrash);
 
                 showToast('Backup loaded successfully!', 'success');
+                event.target.value = null;
             } catch (err) {
                 showToast('JSON parse error! Make sure the file is not corrupted.', 'error');
                 console.error("Import JSON Error:", err);
+                event.target.value = null;
             }
         };
         reader.readAsText(file);
@@ -1355,7 +1641,14 @@ function App() {
             setCustomFolders(customFolders.map(f => f.id === editingFolder.id ? { ...f, name, color: folderColorInput } : f));
             setBookmarks(bookmarks.map(b => b.folder === editingFolder.name ? { ...b, folder: name } : b));
         } else {
-            setCustomFolders([...customFolders, { id: 'f_' + Date.now(), name, color: folderColorInput, parentId: null, isPinned: false }]);
+            setCustomFolders([...customFolders, {
+                id: 'f_' + Date.now(),
+                name,
+                color: folderColorInput,
+                parentId: null,
+                isPinned: false,
+                order: customFolders.length
+            }]);
         }
         setIsFolderModalOpen(false);
         setEditingFolder(null);
@@ -1385,7 +1678,18 @@ function App() {
 
 
     // --- RENDER HELPERS ---
-    const topLevelFolders = useMemo(() => customFolders.filter(f => !f.parentId), [customFolders]);
+    const pinnedFolders = useMemo(() => {
+        return customFolders
+            .filter(f => f.isPinned)
+            .sort((a, b) => (a.order || 0) - (b.order || 0));
+    }, [customFolders]);
+
+
+    const topLevelFolders = useMemo(() => {
+        return customFolders
+            .filter(f => !f.parentId && !f.isPinned)
+            .sort((a, b) => (a.order || 0) - (b.order || 0));
+    }, [customFolders]);
 
     const folderCounts = useMemo(() => {
         const directCounts = {};
@@ -1410,6 +1714,10 @@ function App() {
         });
         return ObjectCounts;
     }, [bookmarks]);
+
+    const pinnedTags = useMemo(() => {
+        return customTags.filter(t => t.isPinned).sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0));
+    }, [customTags, tagCounts]);
 
     const getFolderCount = (fId) => folderCounts[fId] || 0;
     const unsortedCount = useMemo(() => bookmarks.filter(b => isUnsortedFolder(b.folder)).length, [bookmarks]);
@@ -1440,58 +1748,174 @@ function App() {
             const s = debouncedSearchQuery.toLowerCase();
             return mF && (!s || (b.tags || []).some(t => t.includes(s)) || (b.description || '').toLowerCase().includes(s) || (b.tweetText || '').toLowerCase().includes(s) || (b.authorName || '').toLowerCase().includes(s));
         });
-        // Sort newest first by timestamp or id
+        // Sort newest first by timestamp or id (normalized Snowflake support)
         return filtered.sort((a, b) => {
-            const aTime = a.timestamp || parseInt(a.id) || 0;
-            const bTime = b.timestamp || parseInt(b.id) || 0;
-            return bTime - aTime;
+            const getVal = (x) => {
+                const ts = x.timestamp || (typeof x.date === 'number' ? x.date : null);
+                if (ts) return ts;
+                const idNum = parseInt(x.id);
+                // Eğer ID bir Twitter Snowflake ise (10^15'ten büyükse), kabaca milisaniyeye çevir
+                if (idNum > 1000000000000000) {
+                    return Math.floor(idNum / 4194304) + 1288834974657;
+                }
+                return idNum || 0;
+            };
+            return getVal(b) - getVal(a);
         });
     }, [bookmarks, trash, activeFilters, debouncedSearchQuery, customFolders]);
 
+    useEffect(() => {
+        const target = observerTarget.current;
+        if (!target) return;
+
+        const observer = new IntersectionObserver(
+            entries => {
+                if (entries[0].isIntersecting) {
+                    setVisibleCount(prev => prev + 20);
+                }
+            },
+            { threshold: 0.1, rootMargin: '100px' }
+        );
+
+        observer.observe(target);
+        return () => observer.disconnect();
+    }, [visibleCount, filteredBookmarks.length]);
+
 
     // Helper: check if targetId is a descendant of folderId
-    const isDescendantOf = (targetId, folderId) => {
-        const children = customFolders.filter(f => f.parentId === folderId);
+    const isDescendantOf = (targetId, folderId, folders) => {
+        if (!folderId || !targetId) return false;
+        const children = (folders || customFolders).filter(f => f.parentId === folderId);
         for (const child of children) {
             if (child.id === targetId) return true;
-            if (isDescendantOf(targetId, child.id)) return true;
+            if (isDescendantOf(targetId, child.id, folders || customFolders)) return true;
         }
         return false;
     };
 
     const FolderItem = ({ folder, depth = 0 }) => {
-        const children = customFolders.filter(f => f.parentId === folder.id);
+        const children = useMemo(() => {
+            return customFolders
+                .filter(f => f.parentId === folder.id)
+                .sort((a, b) => (a.order || 0) - (b.order || 0));
+        }, [customFolders, folder.id]);
+
         const isExpanded = expandedFolders.includes(folder.id);
         const isActive = activeFilters.includes(folder.name);
         const isDragOver = dragOverFolderId === folder.id;
+        const currentDropPos = folderDropTarget?.id === folder.id ? folderDropTarget.position : null;
+
+        const handleDragOver = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const dragData = dragItemRef.current;
+            if (!dragData) return;
+
+            const rect = e.currentTarget.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            let pos = 'inside';
+
+            // Only allow reordering for folders
+            if (dragData.type === 'folder' && dragData.id !== folder.id) {
+                if (y < rect.height * 0.25) pos = 'before';
+                else if (y > rect.height * 0.75) pos = 'after';
+            }
+
+            if (dragOverFolderId !== folder.id || folderDropTarget?.position !== pos) {
+                setDragOverFolderId(folder.id);
+                setFolderDropTarget({ id: folder.id, position: pos });
+                folderDropRef.current = { id: folder.id, position: pos };
+            }
+        };
+
+        const handleDragEnd = (e) => {
+            if (e) e.stopPropagation();
+            clearDragState();
+        };
+
+        const handleDrop = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const dragData = dragItemRef.current;
+            const dropData = folderDropRef.current;
+
+            handleDragEnd();
+
+            if (!dragData || !dropData) return;
+
+            if (dragData.type === 'folder') {
+                const movedId = dragData.id;
+                const targetId = dropData.id;
+                const position = dropData.position || 'inside';
+
+                if (movedId === targetId) return;
+
+                setCustomFolders(prev => {
+                    // Safety check: Don't drop a folder into its own child
+                    if (isDescendantOf(targetId, movedId, prev)) return prev;
+
+                    let items = [...prev];
+                    const movedIdx = items.findIndex(f => f.id === movedId);
+                    if (movedIdx === -1) return prev;
+
+                    const movedItem = { ...items[movedIdx] };
+                    items.splice(movedIdx, 1);
+
+                    if (position === 'inside') {
+                        movedItem.parentId = targetId;
+                        items.push(movedItem);
+                    } else {
+                        const targetFolder = prev.find(f => f.id === targetId);
+                        movedItem.parentId = targetFolder.parentId;
+                        const targetIndex = items.findIndex(f => f.id === targetId);
+                        if (position === 'before') {
+                            items.splice(targetIndex, 0, movedItem);
+                        } else {
+                            items.splice(targetIndex + 1, 0, movedItem);
+                        }
+                    }
+
+                    // Re-assign global order based on the new array sequence
+                    return items.map((f, idx) => ({ ...f, order: idx }));
+                });
+            } else if (dragData.type === 'tweet') {
+                setBookmarks(prev => prev.map(b => dragData.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
+            }
+        };
+
         return (
-            <div className="w-full">
+            <div className="w-full relative">
+                {/* Visual Line - Top */}
+                {isDragOver && currentDropPos === 'before' && (
+                    <div className="absolute top-0 left-0 right-0 h-[2px] bg-blue-500 z-50 rounded-full" style={{ marginLeft: `${depth * 1.25 + 1.25}rem` }} />
+                )}
+
                 <div
                     draggable
                     onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'folder', id: folder.id }; }}
-                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverFolderId(folder.id); }}
-                    onDragLeave={(e) => { e.stopPropagation(); if (dragOverFolderId === folder.id) setDragOverFolderId(null); }}
-                    onDrop={(e) => {
-                        e.preventDefault(); e.stopPropagation(); setDragOverFolderId(null);
-                        const data = dragItemRef.current;
-                        if (!data) return;
-                        if (data.type === 'folder') {
-                            // Can't drop on self, can't drop parent into its own descendant
-                            if (data.id === folder.id) return;
-                            if (isDescendantOf(folder.id, data.id)) return;
-                            setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: folder.id } : f));
-                        } else if (data.type === 'tweet') {
-                            setBookmarks(prev => prev.map(b => data.ids.includes(b.id) ? { ...b, folder: folder.name } : b));
-                        }
-                        dragItemRef.current = null;
-                    }}
-                    className={`group flex items-center rounded-xl transition-all cursor-pointer ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${isDragOver ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
-                    style={{ paddingLeft: `${depth * 1.25 + 0.25}rem`, paddingRight: '1rem', paddingTop: '0.05rem', paddingBottom: '0.05rem', ...(isActive && !isDragOver ? { backgroundColor: accentColor } : {}) }}
+                    onDragEnter={(e) => e.preventDefault()}
+                    onDragOver={handleDragOver}
+                    onDragLeave={(e) => e.stopPropagation()}
+                    onDragEnd={handleDragEnd}
+                    onDrop={handleDrop}
+                    className={`group flex items-center rounded-xl transition-all cursor-pointer relative ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${isDragOver && currentDropPos === 'inside' ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                    style={{ paddingLeft: `${depth * 1.25 + 0.25}rem`, paddingRight: '1rem', paddingTop: '0.05rem', paddingBottom: '0.05rem', ...(isActive && (!isDragOver || currentDropPos !== 'inside') ? { backgroundColor: accentColor } : {}) }}
                 >
                     <button onClick={(e) => { e.stopPropagation(); setExpandedFolders(prev => prev.includes(folder.id) ? prev.filter(x => x !== folder.id) : [...prev, folder.id]); }} className={`w-4 h-5 flex items-center justify-center shrink-0 ${children.length === 0 ? 'invisible' : ''}`}><LucideIcon name={isExpanded ? "chevron-down" : "chevron-right"} size={10} /></button>
                     <button onClick={() => toggleFilter(folder.name)} className="flex-1 flex items-center gap-2 text-[15px] font-bold truncate py-1.5 text-left"><LucideIcon name="folder" className="text-[14px]" style={{ color: isActive ? '#fff' : folder.color }} /> <span>{folder.name}</span></button>
-                    <div className="flex items-center w-10 justify-center shrink-0 h-full"><span className="text-[11px] font-black opacity-60 group-hover:hidden">{getFolderCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="hidden group-hover:block text-slate-400 hover:text-blue-500"><LucideIcon name="pen" className="text-[11px]" /></button></div>
+                    {/* Pin icon - left of count area */}
+                    {folder.isPinned && <span className="opacity-60 group-hover:hidden w-5 h-5 inline-flex items-center justify-center shrink-0"><LucideIcon name="pin" size={11} /></span>}
+                    <button onClick={(e) => { e.stopPropagation(); setCustomFolders(prev => prev.map(f => f.id === folder.id ? { ...f, isPinned: !f.isPinned } : f)); }} className={`hidden group-hover:inline-flex w-5 h-5 items-center justify-center transition-colors shrink-0 ${folder.isPinned ? 'text-blue-500 hover:text-slate-400' : 'text-slate-400 hover:text-blue-500'}`} title={folder.isPinned ? 'Unpin folder' : 'Pin folder'}><LucideIcon name="pin" size={11} /></button>
+                    <div className="relative flex items-center justify-center w-8 h-5 shrink-0"><span className="text-[11px] font-black opacity-60 group-hover:opacity-0">{getFolderCount(folder.id)}</span><button onClick={(e) => { e.stopPropagation(); setEditingFolder(folder); setFolderNameInput(folder.name); setFolderColorInput(folder.color); setIsFolderModalOpen(true); }} className="absolute inset-0 hidden group-hover:inline-flex items-center justify-center text-slate-400 hover:text-blue-500"><LucideIcon name="pen" size={11} /></button></div>
                 </div>
+
+                {/* Visual Line - Bottom */}
+                {isDragOver && currentDropPos === 'after' && (
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-blue-500 z-50 rounded-full" style={{ marginLeft: `${depth * 1.25 + 1.25}rem` }} />
+                )}
+
                 {isExpanded && children.map(c => <FolderItem key={c.id} folder={c} depth={depth + 1} />)}
             </div>
         );
@@ -1559,7 +1983,7 @@ function App() {
                             </div>
                             <button onClick={() => setIsSidebarOpen(false)} className="w-8 h-8 flex items-center justify-center hover:bg-slate-100 rounded-full"><LucideIcon name="x" className="text-slate-400" /></button>
                         </div>
-                        <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
+                        <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar" onDragOver={(e) => { if (e.target === e.currentTarget) { setDragOverFolderId(null); setDragOverTagId(null); setFolderDropTarget(null); } }}>
                             <div className="space-y-0.5">
                                 <div onClick={() => { toggleFilter('All'); setIsSidebarOpen(false); }} className={`px-4 flex items-center rounded-xl transition-all cursor-pointer ${activeFilters.includes('All') ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFilters.includes('All') ? { backgroundColor: accentColor } : {}}>
                                     <button className="flex-1 flex items-center gap-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
@@ -1569,9 +1993,62 @@ function App() {
                                     <button className="flex-1 flex items-center gap-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
                                     <div className="flex items-center w-10 justify-center shrink-0"><span className="text-[11px] font-black opacity-60">{unsortedCount}</span></div>
                                 </div>
+                                {pinnedFolders.length > 0 && (
+                                    <div className="space-y-0 mt-1">
+                                        {pinnedFolders.map(f => <FolderItem key={f.id} folder={f} />)}
+                                    </div>
+                                )}
+                                {pinnedTags.length > 0 && (
+                                    <div className="space-y-0">
+                                        {pinnedTags.map(tag => {
+                                            const isActive = activeFilters.includes(`tag:${tag.name}`);
+                                            const count = tagCounts[tag.name] || 0;
+                                            return (
+                                                <div
+                                                    key={tag.id}
+                                                    onClick={() => { toggleFilter(`tag:${tag.name}`); setIsSidebarOpen(false); }}
+                                                    onDragEnter={(e) => e.preventDefault()}
+                                                    onDragOver={(e) => {
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        if (dragItemRef.current?.type === 'tweet') setDragOverTagId(tag.id);
+                                                    }}
+                                                    onDragLeave={() => { if (dragOverTagId === tag.id) setDragOverTagId(null); }}
+                                                    onDrop={(e) => handleTagDrop(e, tag.name)}
+                                                    className={`px-4 flex items-center rounded-xl transition-colors cursor-pointer group ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${dragOverTagId === tag.id ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                                                    style={isActive && dragOverTagId !== tag.id ? { backgroundColor: accentColor } : {}}
+                                                >
+                                                    <button className="flex-1 flex items-center gap-2 py-0 text-[15px] font-bold text-left">
+                                                        <span className="font-black text-[14px] w-5 flex justify-center shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
+                                                        <span className="truncate uppercase tracking-wider text-[11px]">{tag.name}</span>
+                                                    </button>
+                                                    <button onClick={(e) => { e.stopPropagation(); setCustomTags(prev => prev.map(t => t.id === tag.id ? { ...t, isPinned: !t.isPinned } : t)); }} className={`w-5 h-5 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-colors text-blue-500 hover:text-slate-400 shrink-0`} title="Unpin tag"><LucideIcon name="pin" size={11} /></button>
+                                                    <div className="relative flex items-center justify-center w-8 h-5 shrink-0">
+                                                        <span className={`text-[11px] font-black group-hover:opacity-0 ${isActive ? 'text-white/70' : 'opacity-60'}`}>{count}</span>
+                                                        <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={11} /></button>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                             <div>
-                                <div className="flex justify-between items-center mb-1 px-4">
+                                <div
+                                    className={`flex justify-between items-center mb-1 px-4 rounded-lg transition-all ${dragOverFolderId === 'root' ? 'bg-blue-50 ring-2 ring-blue-400 ring-dashed py-1' : ''}`}
+                                    onDragEnter={(e) => e.preventDefault()}
+                                    onDragOver={(e) => { e.preventDefault(); setDragOverFolderId('root'); }}
+                                    onDragLeave={() => { if (dragOverFolderId === 'root') clearDragState(); }}
+                                    onDrop={(e) => {
+                                        e.preventDefault();
+                                        const data = dragItemRef.current;
+                                        if (!data) return;
+                                        if (data.type === 'folder') {
+                                            setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: null } : f));
+                                        }
+                                        clearDragState();
+                                    }}
+                                >
                                     <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2>
                                     <div className="flex items-center gap-1.5 h-6">
                                         <button
@@ -1587,7 +2064,7 @@ function App() {
                                     </div>
                                 </div>
                                 <div className="space-y-0">
-                                    {customFolders.filter(f => !f.parentId).map(f => <FolderItem key={f.id} folder={f} />)}
+                                    {customFolders.filter(f => !f.parentId && !f.isPinned).sort((a, b) => (a.order || 0) - (b.order || 0)).map(f => <FolderItem key={f.id} folder={f} />)}
                                 </div>
                             </div>
                             <div>
@@ -1610,8 +2087,8 @@ function App() {
                                     </div>
                                 </div>
                                 {isTagsExpanded && (
-                                    <div className={tagLayout === 'pill' ? "flex flex-wrap gap-1.5 px-2 mt-1" : "space-y-0.5 mt-2"}>
-                                        {customTags.length > 0 ? [...customTags].sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0)).map(tag => {
+                                    <div className={tagLayout === 'pill' ? "flex flex-wrap gap-1.5 px-2 mt-1" : "space-y-0 mt-1"}>
+                                        {customTags.filter(t => !t.isPinned).length > 0 ? [...customTags].filter(t => !t.isPinned).sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0)).map(tag => {
                                             const isActive = activeFilters.includes(`tag:${tag.name}`);
                                             const count = tagCounts[tag.name] || 0;
 
@@ -1620,8 +2097,16 @@ function App() {
                                                     <div
                                                         key={tag.id}
                                                         onClick={() => { toggleFilter(`tag:${tag.name}`); setIsSidebarOpen(false); }}
-                                                        className={`h-7 flex items-center cursor-pointer rounded-lg transition-all px-2.5 border ${isActive ? 'text-white shadow-sm border-transparent' : 'text-slate-500 bg-slate-50 border-slate-100 hover:bg-slate-100'}`}
-                                                        style={isActive ? { backgroundColor: accentColor } : {}}
+                                                        onDragEnter={(e) => e.preventDefault()}
+                                                        onDragOver={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            if (dragItemRef.current?.type === 'tweet') setDragOverTagId(tag.id);
+                                                        }}
+                                                        onDragLeave={() => { if (dragOverTagId === tag.id) setDragOverTagId(null); }}
+                                                        onDrop={(e) => handleTagDrop(e, tag.name)}
+                                                        className={`h-7 flex items-center cursor-pointer rounded-lg transition-colors px-2.5 border ${isActive ? 'text-white shadow-sm border-transparent' : 'text-slate-500 bg-slate-50 border-slate-100 hover:bg-slate-100'} ${dragOverTagId === tag.id ? 'ring-2 ring-blue-400 bg-blue-50/70' : ''}`}
+                                                        style={isActive && dragOverTagId !== tag.id ? { backgroundColor: accentColor } : {}}
                                                     >
                                                         <span className="font-black mr-1.5 text-[11px] flex items-center" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
                                                         <span className="text-[12px] font-bold flex items-center uppercase tracking-wider">{tag.name}</span>
@@ -1632,9 +2117,17 @@ function App() {
                                                 return (
                                                     <div
                                                         key={tag.id}
-                                                        onClick={(e) => { e.stopPropagation(); toggleFilter(`tag:${tag.name}`, true); setIsSidebarOpen(false); }}
-                                                        className={`px-4 flex items-center rounded-xl transition-all cursor-pointer group ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}
-                                                        style={isActive ? { backgroundColor: accentColor } : {}}
+                                                        onClick={(e) => { e.stopPropagation(); toggleFilter(`tag:${tag.name}`); setIsSidebarOpen(false); }}
+                                                        onDragEnter={(e) => e.preventDefault()}
+                                                        onDragOver={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            if (dragItemRef.current?.type === 'tweet') setDragOverTagId(tag.id);
+                                                        }}
+                                                        onDragLeave={() => { if (dragOverTagId === tag.id) setDragOverTagId(null); }}
+                                                        onDrop={(e) => handleTagDrop(e, tag.name)}
+                                                        className={`px-4 flex items-center rounded-xl transition-colors cursor-pointer group ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${dragOverTagId === tag.id ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                                                        style={isActive && dragOverTagId !== tag.id ? { backgroundColor: accentColor } : {}}
                                                     >
                                                         <button className="flex-1 flex items-center gap-2 py-0 text-[15px] font-bold text-left">
                                                             <span className="font-black text-[14px] w-5 flex justify-center shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
@@ -1688,7 +2181,7 @@ function App() {
                         <span className="text-[15px] text-slate-500 leading-none" style={{ fontFamily: '"Londrina Solid", sans-serif', fontWeight: 400, letterSpacing: '0.2px' }}>Save Your Feed</span>
                     </div>
                 </div>
-                <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar">
+                <div className="flex-1 overflow-y-auto py-6 px-5 space-y-6 custom-scrollbar" onDragOver={(e) => { if (e.target === e.currentTarget) { setDragOverFolderId(null); setDragOverTagId(null); setFolderDropTarget(null); } }}>
                     <div className="space-y-0.5">
                         <div onClick={() => toggleFilter('All')} className={`px-4 flex items-center rounded-xl transition-all cursor-pointer ${activeFilters.includes('All') ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`} style={activeFilters.includes('All') ? { backgroundColor: accentColor } : {}}>
                             <button className="flex-1 flex items-center gap-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="layers" size={18} /> All Bookmarks</button>
@@ -1698,20 +2191,60 @@ function App() {
                             <button className="flex-1 flex items-center gap-3 py-2 text-[15px] font-bold text-left"><LucideIcon name="inbox" size={18} /> Unsorted</button>
                             <div className="flex items-center w-10 justify-center shrink-0"><span className="text-[11px] font-black opacity-60">{unsortedCount}</span></div>
                         </div>
+                        {pinnedFolders.length > 0 && (
+                            <div className="space-y-0 mt-1">
+                                {pinnedFolders.map(f => <FolderItem key={f.id} folder={f} />)}
+                            </div>
+                        )}
+                        {pinnedTags.length > 0 && (
+                            <div className="space-y-0">
+                                {pinnedTags.map(tag => {
+                                    const isActive = activeFilters.includes(`tag:${tag.name}`);
+                                    const count = tagCounts[tag.name] || 0;
+                                    return (
+                                        <div
+                                            key={tag.id}
+                                            onClick={() => toggleFilter(`tag:${tag.name}`)}
+                                            onDragEnter={(e) => e.preventDefault()}
+                                            onDragOver={(e) => {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                if (dragItemRef.current?.type === 'tweet') setDragOverTagId(tag.id);
+                                            }}
+                                            onDragLeave={() => { if (dragOverTagId === tag.id) setDragOverTagId(null); }}
+                                            onDrop={(e) => handleTagDrop(e, tag.name)}
+                                            className={`px-4 flex items-center rounded-xl transition-colors cursor-pointer group ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${dragOverTagId === tag.id ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                                            style={isActive && dragOverTagId !== tag.id ? { backgroundColor: accentColor } : {}}
+                                        >
+                                            <button className="flex-1 flex items-center gap-2 py-0 text-[15px] font-bold text-left">
+                                                <span className="font-black text-[14px] w-5 flex justify-center shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
+                                                <span className="truncate uppercase tracking-wider text-[11px]">{tag.name}</span>
+                                            </button>
+                                            <button onClick={(e) => { e.stopPropagation(); setCustomTags(prev => prev.map(t => t.id === tag.id ? { ...t, isPinned: !t.isPinned } : t)); }} className={`w-5 h-5 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 transition-colors text-blue-500 hover:text-slate-400 shrink-0`} title="Unpin tag"><LucideIcon name="pin" size={11} /></button>
+                                            <div className="relative flex items-center justify-center w-8 h-5 shrink-0">
+                                                <span className={`text-[11px] font-black group-hover:opacity-0 ${isActive ? 'text-white/70' : 'opacity-60'}`}>{count}</span>
+                                                <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={11} /></button>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
                     <div>
                         <div
                             className={`flex justify-between items-center mb-1 px-4 rounded-lg transition-all ${dragOverFolderId === 'root' ? 'bg-blue-50 ring-2 ring-blue-400 ring-dashed py-1' : ''}`}
+                            onDragEnter={(e) => e.preventDefault()}
                             onDragOver={(e) => { e.preventDefault(); setDragOverFolderId('root'); }}
-                            onDragLeave={() => { if (dragOverFolderId === 'root') setDragOverFolderId(null); }}
+                            onDragLeave={() => { if (dragOverFolderId === 'root') clearDragState(); }}
                             onDrop={(e) => {
-                                e.preventDefault(); setDragOverFolderId(null);
+                                e.preventDefault();
                                 const data = dragItemRef.current;
                                 if (!data) return;
                                 if (data.type === 'folder') {
                                     setCustomFolders(prev => prev.map(f => f.id === data.id ? { ...f, parentId: null } : f));
                                 }
-                                dragItemRef.current = null;
+                                clearDragState();
                             }}
                         >
                             <h2 className="text-xs font-bold text-slate-600 uppercase tracking-wider">Folders</h2>
@@ -1750,8 +2283,8 @@ function App() {
                             </div>
                         </div>
                         {isTagsExpanded && (
-                            <div className={tagLayout === 'pill' ? "flex flex-wrap gap-1.5 px-2 mt-1" : "space-y-0.5 mt-2"}>
-                                {customTags.length > 0 ? [...customTags].sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0)).map(tag => {
+                            <div className={tagLayout === 'pill' ? "flex flex-wrap gap-1.5 px-2 mt-1" : "space-y-0 mt-1"}>
+                                {customTags.filter(t => !t.isPinned).length > 0 ? [...customTags].filter(t => !t.isPinned).sort((a, b) => (tagCounts[b.name] || 0) - (tagCounts[a.name] || 0)).map(tag => {
                                     const isActive = activeFilters.includes(`tag:${tag.name}`);
                                     const count = tagCounts[tag.name] || 0;
 
@@ -1760,14 +2293,25 @@ function App() {
                                             <div
                                                 key={tag.id}
                                                 onClick={() => toggleFilter(`tag:${tag.name}`)}
-                                                className={`group h-8 flex items-center rounded-lg transition-all cursor-pointer px-3 py-0.5 border ${isActive ? 'text-white shadow-sm border-transparent' : 'text-slate-600 bg-slate-50 border-slate-100 hover:border-slate-200 hover:bg-slate-100'}`}
-                                                style={isActive ? { backgroundColor: accentColor } : {}}
+                                                onDragEnter={(e) => e.preventDefault()}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    if (dragItemRef.current?.type === 'tweet') setDragOverTagId(tag.id);
+                                                }}
+                                                onDragLeave={() => { if (dragOverTagId === tag.id) setDragOverTagId(null); }}
+                                                onDrop={(e) => handleTagDrop(e, tag.name)}
+                                                className={`group h-8 flex items-center rounded-lg transition-colors cursor-pointer px-3 py-0.5 border ${isActive ? 'text-white shadow-sm border-transparent' : 'text-slate-600 bg-slate-50 border-slate-100 hover:border-slate-200 hover:bg-slate-100'} ${dragOverTagId === tag.id ? 'ring-2 ring-blue-400 bg-blue-50/70' : ''}`}
+                                                style={isActive && dragOverTagId !== tag.id ? { backgroundColor: accentColor } : {}}
                                             >
                                                 <span className="font-black text-[12px] mr-1.5 shrink-0 flex items-center" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
                                                 <span className="text-[11px] font-bold uppercase tracking-wider truncate max-w-[140px] flex items-center">{tag.name}</span>
-                                                <div className="flex items-center justify-center ml-2 min-w-[14px] h-full">
-                                                    <span className={`text-[11px] font-black flex items-center pt-[1px] group-hover:hidden ${isActive ? 'opacity-70' : 'opacity-30'}`}>{count}</span>
-                                                    <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`hidden group-hover:flex items-center hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={11} /></button>
+                                                <div className="relative flex items-center justify-center ml-2 min-w-[28px] h-full">
+                                                    <span className={`text-[11px] font-black flex items-center pt-[1px] group-hover:opacity-0 ${isActive ? 'opacity-70' : 'opacity-30'}`}>{count}</span>
+                                                    <div className="absolute inset-0 flex items-center justify-center gap-0.5 opacity-0 group-hover:opacity-100">
+                                                        <button onClick={(e) => { e.stopPropagation(); setCustomTags(prev => prev.map(t => t.id === tag.id ? { ...t, isPinned: true } : t)); }} className={`w-4 h-4 inline-flex items-center justify-center hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`} title="Pin tag"><LucideIcon name="pin" size={10} /></button>
+                                                        <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`w-4 h-4 inline-flex items-center justify-center hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={10} /></button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         );
@@ -1775,17 +2319,26 @@ function App() {
                                         return (
                                             <div
                                                 key={tag.id}
-                                                onClick={(e) => { e.stopPropagation(); toggleFilter(`tag:${tag.name}`, true); }}
-                                                className={`px-4 flex items-center rounded-xl transition-all cursor-pointer group ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'}`}
-                                                style={isActive ? { backgroundColor: accentColor } : {}}
+                                                onClick={(e) => { e.stopPropagation(); toggleFilter(`tag:${tag.name}`); }}
+                                                onDragEnter={(e) => e.preventDefault()}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault();
+                                                    e.stopPropagation();
+                                                    if (dragItemRef.current?.type === 'tweet') setDragOverTagId(tag.id);
+                                                }}
+                                                onDragLeave={() => { if (dragOverTagId === tag.id) setDragOverTagId(null); }}
+                                                onDrop={(e) => handleTagDrop(e, tag.name)}
+                                                className={`px-4 flex items-center rounded-xl transition-colors cursor-pointer group ${isActive ? 'text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100'} ${dragOverTagId === tag.id ? 'ring-2 ring-blue-400 ring-inset bg-blue-50/70' : ''}`}
+                                                style={isActive && dragOverTagId !== tag.id ? { backgroundColor: accentColor } : {}}
                                             >
                                                 <button className="flex-1 flex items-center gap-2 py-0 text-[15px] font-bold text-left">
                                                     <span className="font-black text-[14px] w-5 flex justify-center shrink-0" style={{ color: isActive ? '#fff' : tag.color }}>#</span>
                                                     <span className="truncate uppercase tracking-wider text-[11px]">{tag.name}</span>
                                                 </button>
-                                                <div className="flex items-center w-10 justify-center shrink-0 h-full">
-                                                    <span className={`text-[11px] font-black group-hover:hidden ${isActive ? 'text-white/70' : 'opacity-60'}`}>{count}</span>
-                                                    <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`hidden group-hover:flex items-center hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={11} /></button>
+                                                <button onClick={(e) => { e.stopPropagation(); setCustomTags(prev => prev.map(t => t.id === tag.id ? { ...t, isPinned: true } : t)); }} className={`w-5 h-5 inline-flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-blue-500 shrink-0 ${isActive ? 'text-white' : 'text-slate-400'}`} title="Pin tag"><LucideIcon name="pin" size={11} /></button>
+                                                <div className="relative flex items-center justify-center w-8 h-5 shrink-0">
+                                                    <span className={`text-[11px] font-black group-hover:opacity-0 ${isActive ? 'text-white/70' : 'opacity-60'}`}>{count}</span>
+                                                    <button onClick={(e) => { e.stopPropagation(); setEditingTag(tag); setTagNameInput(tag.name); setTagColorInput(tag.color); setIsTagModalOpen(true); }} className={`absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 hover:text-blue-500 ${isActive ? 'text-white' : 'text-slate-400'}`}><LucideIcon name="pen" size={11} /></button>
                                                 </div>
                                             </div>
                                         );
@@ -1881,16 +2434,7 @@ function App() {
                                                 <div className="flex-1 max-h-72 overflow-y-auto custom-scrollbar pr-1">
                                                     <div className="text-[10px] font-bold text-slate-400 uppercase px-2 mb-3 tracking-widest">Folders</div>
                                                     <div className="space-y-0.5">
-                                                        {!activeFilters.includes('All') && (
-                                                            <div onClick={(e) => { e.stopPropagation(); toggleFilter('All', true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
-                                                                <LucideIcon name="layers" size={14} className="text-slate-400" /> All Bookmarks
-                                                            </div>
-                                                        )}
-                                                        {!activeFilters.includes('Unsorted') && (
-                                                            <div onClick={(e) => { e.stopPropagation(); toggleFilter('Unsorted', true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
-                                                                <LucideIcon name="inbox" size={14} className="text-slate-400" /> Unsorted
-                                                            </div>
-                                                        )}
+
                                                         {customFolders.filter(f => !activeFilters.includes(f.name)).map(f => (
                                                             <div key={f.name} onClick={(e) => { e.stopPropagation(); toggleFilter(f.name, true); setActiveAddMenu(null); }} className="flex items-center gap-2 px-3 py-2 hover:bg-slate-50 rounded-xl cursor-pointer text-sm font-bold text-slate-700 transition-colors">
                                                                 <LucideIcon name="folder" size={14} style={{ color: f.color }} />
@@ -2002,7 +2546,7 @@ function App() {
 
                             {customFolders.length > 0 ? (
                                 <div className="flex flex-wrap gap-2.5">
-                                    {customFolders.map(folder => {
+                                    {[...customFolders].sort((a, b) => (a.order || 0) - (b.order || 0)).map(folder => {
                                         const count = getFolderCount(folder.id);
 
                                         // Find root ancestor's color for inheritance
@@ -2082,7 +2626,13 @@ function App() {
                                         <div key={colIdx} className="flex-1 flex flex-col gap-3 sm:gap-6 min-w-0">
                                             {col.map(b => (
                                                 <div key={b.id} draggable onDragStart={(e) => { e.stopPropagation(); dragItemRef.current = { type: 'tweet', ids: [b.id] }; }} onClick={() => { if (!activeFilters.includes('Trash')) { setFocusedTweet(b); setInitialFocusedTweet(b); setIsNoteEditing(false); } }} className={`group bg-white rounded-[1.25rem] sm:rounded-[1.5rem] border ${showBrandLines && brandLineStyle === 'border' ? (b.url && b.url.includes('reddit.com') ? 'border-[#ff4500]' : 'border-[#1da1f2]') : 'border-slate-200'} shadow-sm overflow-hidden relative w-full transition-all duration-300 ${activeFilters.includes('Trash') ? 'opacity-70' : ''} hover:border-slate-400 p-3 sm:p-4`}>
-                                                    <div className="w-full">{b.tweetText ? <CustomTweetCard bookmark={b} onImageClick={handleImageClick} /> : (b.url && b.url.includes('reddit.com') ? <RedditEmbed url={b.url} /> : <TweetEmbed tweetId={b.tweetId} />)}</div>
+                                                    <div className="w-full">
+                                                        <CustomTweetCard
+                                                            bookmark={b}
+                                                            onImageClick={handleImageClick}
+                                                            showFullRedditContent={!(b.url && b.url.includes('reddit.com'))}
+                                                        />
+                                                    </div>
 
                                                     <div className="mt-4 space-y-3">
                                                         {b.description && <div className="bg-slate-50/50 border border-slate-100 p-3 rounded-2xl"><p className="text-[13px] font-medium text-slate-700 leading-relaxed line-clamp-3 break-words">{b.description}</p></div>}
@@ -2143,11 +2693,15 @@ function App() {
             {/* EDIT (FOCUS) MODAL */}
             {
                 focusedTweet && (
-                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-2 sm:p-4 md:p-8 overflow-y-auto" onClick={() => setFocusedTweet(null)}>
+                    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[100] flex items-center justify-center p-2 sm:p-4 md:p-8 overflow-y-auto" onClick={() => { setFocusedTweet(null); setIsNoteEditing(false); }}>
                         <div className="bg-white w-full max-w-5xl rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden modal-enter flex flex-col md:flex-row h-fit max-h-[95vh]" onClick={(e) => e.stopPropagation()}>
                             <div className="flex-1 bg-slate-100 p-4 sm:p-8 md:p-12 lg:p-16 overflow-y-auto custom-scrollbar flex items-start justify-center min-h-[200px] sm:min-h-[400px]">
                                 <div className="w-full max-w-lg bg-white rounded-2xl shadow-sm border border-slate-200 p-3 sm:p-5">
-                                    {focusedTweet.tweetText ? <CustomTweetCard bookmark={focusedTweet} onImageClick={(medias, idx, type, poster) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster })} /> : (focusedTweet.url && focusedTweet.url.includes('reddit.com') ? <RedditEmbed url={focusedTweet.url} /> : <TweetEmbed tweetId={focusedTweet.tweetId} key={`focus-${focusedTweet.id}`} />)}
+                                    <CustomTweetCard
+                                        bookmark={focusedTweet}
+                                        onImageClick={(medias, idx, type, poster, tweetId, isReddit) => setPreviewState({ medias, currentIndex: idx, mediaType: type || focusedTweet.mediaType, poster, tweetId, isReddit })}
+                                        showFullRedditContent={true}
+                                    />
                                 </div>
                             </div>
                             <div className="w-full md:w-[350px] p-5 sm:p-8 border-l border-slate-100 flex flex-col justify-between bg-white overflow-y-auto custom-scrollbar relative">
@@ -2207,7 +2761,7 @@ function App() {
                                                 {activeAddMenu === 'folder' && (
                                                     <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-100 z-50 p-2 max-h-48 overflow-y-auto custom-scrollbar" onClick={(e) => e.stopPropagation()}>
                                                         <div className="text-[10px] font-bold text-slate-400 uppercase px-2 mb-1 mt-1">Select Folder</div>
-                                                        {customFolders.length > 0 ? customFolders.map(f => (
+                                                        {customFolders.length > 0 ? [...customFolders].sort((a, b) => (a.order || 0) - (b.order || 0)).map(f => (
                                                             <div key={f.name} onClick={(e) => {
                                                                 e.stopPropagation();
                                                                 const updated = { ...focusedTweet, folder: f.name };
@@ -2333,7 +2887,28 @@ function App() {
                             <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex - 1 + prev.medias.length) % prev.medias.length })); }} className="absolute left-4 sm:left-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><LucideIcon name="chevron-left" className="text-lg" /></button>
                         )}
                         {/* Media */}
-                        {previewState.mediaType === 'video' ? <HlsVideoPlayer src={previewState.medias[previewState.currentIndex]} poster={previewState.poster} controls autoPlay className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none" onClick={(e) => e.stopPropagation()} /> : <img src={getHighResUrl(previewState.medias[previewState.currentIndex])} className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} />}
+                        {(previewState.mediaType === 'video' && isPlayableVideoUrl(previewState.medias[previewState.currentIndex])) ? (
+                            <HlsVideoPlayer
+                                src={previewState.medias[previewState.currentIndex]}
+                                poster={previewState.poster}
+                                controls
+                                autoPlay
+                                className="max-w-full max-h-[90vh] rounded-lg shadow-2xl outline-none"
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        ) : (previewState.mediaType === 'video' && previewState.tweetId && !String(previewState.tweetId).includes('_')) ? (
+                            <div className="w-full max-w-2xl bg-white rounded-2xl p-3 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                                <div className="max-h-[80vh] overflow-y-auto custom-scrollbar">
+                                    {previewState.isReddit ? <RedditEmbed url={previewState.medias[0] || ""} /> : <TweetEmbed tweetId={previewState.tweetId} />}
+                                </div>
+                            </div>
+                        ) : (
+                            <img
+                                src={getHighResUrl(previewState.medias[previewState.currentIndex])}
+                                className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl"
+                                onClick={(e) => e.stopPropagation()}
+                            />
+                        )}
                         {/* Right Arrow */}
                         {previewState.medias.length > 1 && (
                             <button onClick={(e) => { e.stopPropagation(); setPreviewState(prev => ({ ...prev, currentIndex: (prev.currentIndex + 1) % prev.medias.length })); }} className="absolute right-4 sm:right-8 top-1/2 -translate-y-1/2 w-12 h-12 flex items-center justify-center bg-white/10 hover:bg-white/25 text-white rounded-full transition-all backdrop-blur-sm z-10"><LucideIcon name="chevron-right" className="text-lg" /></button>
@@ -2569,6 +3144,17 @@ function App() {
                                             </div>
                                             <div className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 group-hover:bg-blue-100 text-slate-400 group-hover:text-blue-500 transition-all">
                                                 <LucideIcon name="download" size={14} />
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center justify-between p-3 rounded-xl border border-slate-100 hover:border-slate-200 hover:bg-slate-50 cursor-pointer group transition-all" onClick={() => document.getElementById('restore-input').click()}>
+                                            <div className="flex flex-col">
+                                                <span className="text-sm font-bold text-slate-700 group-hover:text-blue-600 transition-colors">Restore Archive</span>
+                                                <span className="text-[10px] font-medium text-slate-400">Load a JSON backup to restore data.</span>
+                                                <input id="restore-input" type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
+                                            </div>
+                                            <div className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 group-hover:bg-blue-100 text-slate-400 group-hover:text-blue-500 transition-all">
+                                                <LucideIcon name="upload" size={14} />
                                             </div>
                                         </div>
 
